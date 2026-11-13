@@ -15,9 +15,8 @@ Persistent named volumes store Woodpecker server/agent state. Registration is
 closed; GitHub user `sharphurt` is the administrator. Only public repositories
 owned by sharphurt are exposed through the configured GitHub integration.
 
-Required setup still pending: GitHub OAuth Client ID/Secret in the server `.env`,
-first login, repository activation and `coolify_deploy_token` repository secret
-(deploy permission only), then an end-to-end push verification.
+The repository is active in Woodpecker. Its `coolify_deploy_token` secret is
+available on push and manual runs and can deploy only the coffee application.
 Pipeline containers need the existing `coolify` Docker network to reach its API.
 No periodic polling or GitHub Actions runner is installed.
 

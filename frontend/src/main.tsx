@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { createId } from "./id";
 import { api, login, refreshCsrf } from "./api";
 import "./style.css";
 type Row = Record<string, any>;
@@ -23,7 +23,7 @@ const format = (v: string) =>
     hour: "2-digit",
     minute: "2-digit",
   });
-function App() {
+export function App() {
   const [ready, setReady] = useState(false),
     [user, setUser] = useState<Row | null>(null),
     [page, setPage] = useState("Сейчас"),
@@ -88,7 +88,7 @@ function App() {
   }
   function open(type: string, extra: Row = {}) {
     setError("");
-    setModal({ type, key: crypto.randomUUID(), ...extra });
+    setModal({ type, key: createId(), ...extra });
   }
   async function cup(bag?: Row) {
     open("cup", { bagId: bag?.id, volumeMl: profile.default_cup_volume_ml });
@@ -836,4 +836,3 @@ function App() {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);

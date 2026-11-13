@@ -1,0 +1,7 @@
+.git
+.tools
+.env
+**/node_modules
+**/dist
+**/target
+docs/*-live.html

@@ -1,0 +1,103 @@
+openapi: 3.1.0
+info:
+  title: Мой кофе — реализованное ядро
+  version: 0.1.0
+  description: Частичная спецификация текущей итерации; не полный контракт V1. Ответы diary используют snake_case. Изменения требуют CSRF header из /auth/csrf.
+servers:
+  - url: /api/v1
+security:
+  - session: []
+paths:
+  /auth/csrf:
+    get:
+      security: []
+      responses:
+        '200':
+          description: CSRF token и headerName
+  /auth/login:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string}
+                password: {type: string}
+      responses:
+        '200': {description: Cookie session установлена; обновить CSRF token}
+        '401': {description: Неверные данные}
+        '429': {description: Более 10 попыток в минуту}
+  /auth/logout:
+    post:
+      responses:
+        '204': {description: Сессия инвалидирована}
+  /auth/me:
+    get:
+      responses:
+        '200': {description: id и login владельца}
+  /bags:
+    get:
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, default: 20, maximum: 100}}
+        - {in: query, name: offset, schema: {type: integer, default: 0}}
+        - {in: query, name: q, schema: {type: string}}
+        - {in: query, name: deleted, schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: Массив пачек со сводками rating/tasting_count/cup_count}
+    post:
+      parameters:
+        - {in: header, name: Idempotency-Key, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {type: string, maxLength: 200, description: Обязательно без lotId}
+                lotId: {type: string, format: uuid}
+                roasterName: {type: string, maxLength: 120}
+                massG: {type: number, default: 250, minimum: 1, maximum: 5000}
+                status: {enum: [ACTIVE, STOCK, FINISHED], default: ACTIVE}
+                note: {type: string, maxLength: 5000}
+      responses:
+        '200': {description: Созданная пачка или сохранённый результат повтора}
+        '409': {description: Ключ уже использован для другого тела}
+        '422': {description: Ошибка валидации с fieldErrors}
+  /consumptions:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientEventId]
+              properties:
+                clientEventId: {type: string, format: uuid}
+                bagId: {type: [string, 'null'], format: uuid}
+                consumedAt: {type: string, format: date-time}
+                volumeMl: {type: integer, minimum: 10, maximum: 2000}
+                coffeeLabel: {type: string, maxLength: 200}
+                comment: {type: string, maxLength: 5000}
+      responses:
+        '200': {description: Событие с сохранённым объёмом и profile_snapshot}
+        '409': {description: Конфликт clientEventId}
+        '422': {description: Ошибка валидации}
+  /consumption-stats:
+    get:
+      parameters:
+        - {in: query, name: start, required: true, schema: {type: string, format: date}}
+        - {in: query, name: end, required: true, schema: {type: string, format: date}}
+      responses:
+        '200': {description: cups, volume, timezone и days включая нулевые дни}
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: JSESSIONID

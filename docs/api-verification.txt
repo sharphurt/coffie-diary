@@ -1,0 +1,1 @@
+PASS: session, CSRF, atomic bag/lot, repeat purchase, multiple active bags, idempotency, conflicting retry, unknown coffee, independent tasting/consumption, deletion/restore, volume snapshots, status history, optimistic locking, validation.

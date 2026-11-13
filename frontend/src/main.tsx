@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createId } from "./id";
 import { api, login, refreshCsrf } from "./api";
 import "./style.css";
@@ -24,6 +24,8 @@ const format = (v: string) =>
     minute: "2-digit",
   });
 export function App() {
+  const quickLock = useRef(false);
+  const [quick, setQuick] = useState<{ request: Row; event?: Row; failed?: boolean } | null>(null);
   const [ready, setReady] = useState(false),
     [user, setUser] = useState<Row | null>(null),
     [page, setPage] = useState("Сейчас"),
@@ -93,6 +95,39 @@ export function App() {
   async function cup(bag?: Row) {
     open("cup", { bagId: bag?.id, volumeMl: profile.default_cup_volume_ml });
   }
+  async function quickCup(request: Row) {
+    if (quickLock.current) return;
+    quickLock.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setQuick({ request });
+    try {
+      const event = await api("/consumptions", "POST", request);
+      setQuick({ request, event });
+      try {
+        await refresh();
+      } catch {
+        setError("Чашка сохранена, но счётчики не обновились. Обновите страницу.");
+      }
+    } catch {
+      setQuick({ request, failed: true });
+      setError("Не удалось подтвердить сохранение чашки. Повторите запрос — уже сохранённая чашка не добавится дважды.");
+    } finally {
+      quickLock.current = false;
+      setBusy(false);
+    }
+  }
+  async function undoQuick() {
+    const event = quick?.event;
+    if (!event) return;
+    await run(async () => {
+      const current = await api(`/consumptions/${event.id}`);
+      if (!current.deleted_at)
+        await api(`/consumptions/${event.id}?version=${current.version}`, "DELETE");
+      setQuick(null);
+    }, "Чашка отменена");
+  }
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget),
@@ -145,6 +180,7 @@ export function App() {
         );
       }
       setModal(null);
+      if (m.eventId && m.eventId === quick?.event?.id) setQuick(null);
     });
   }
   const title =
@@ -262,6 +298,7 @@ export function App() {
               run(async () => {
                 await api("/auth/logout", "POST");
                 setUser(null);
+                setQuick(null);
                 await refreshCsrf();
               }, "", false)
             }
@@ -280,6 +317,17 @@ export function App() {
           <p role="alert" className="error">
             {error}
           </p>
+        )}
+        {quick && (
+          <div role="status" className="notice">
+            {quick.event ? `Учтена чашка · ${quick.event.volume_ml} мл` : quick.failed ? "Результат записи чашки не подтверждён" : "Сохраняем чашку…"}
+            {quick.failed && <button disabled={busy} onClick={() => quickCup(quick.request)}>Повторить запись чашки</button>}
+            {quick.event && <>
+              <button disabled={busy} onClick={undoQuick}>Отменить чашку</button>
+              <button disabled={busy} onClick={() => open("tasting", { bagId: quick.event!.bag_id, eventId: quick.event!.id })}>Оценить чашку</button>
+              <button disabled={busy} aria-label="Закрыть сообщение о чашке" onClick={() => setQuick(null)}>×</button>
+            </>}
+          </div>
         )}
         {notice && (
           <div role="status" className="notice">
@@ -348,9 +396,9 @@ export function App() {
                         </b>
                       </p>
                       <button
-                        disabled={busy}
+                        disabled={busy || !!(quick && !quick.event)}
                         className="primary wide"
-                        onClick={() => cup(b)}
+                        onClick={() => quickCup({ bagId: b.id, volumeMl: profile.default_cup_volume_ml, clientEventId: createId() })}
                       >
                         Выпил чашку · {profile.default_cup_volume_ml} мл
                       </button>

@@ -34,7 +34,7 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   await expect(card).toBeVisible();
 
   await card.getByRole('button', { name: /Выпил чашку/ }).click();
-  await save(page);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect.poll(async () => (await totals(page)).cups).toBe(initial.cups + 1);
   await expect(page.locator('.numbers')).toContainText(String(initial.volume + 250));
 
@@ -151,4 +151,51 @@ test('cancel, stock opening, standalone rating and settings', async ({ page }, i
   await expect.poll(async () => (await (await page.request.get('/api/v1/profile')).json()).default_cup_volume_ml).toBe(250);
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+
+test('quick cup: lost response retries once, undo and rating notification', async ({ page }, info) => {
+  await page.goto('/');
+  await page.getByLabel('Пароль', { exact: true }).fill(process.env.OWNER_PASSWORD!);
+  await page.getByRole('button', { name: 'Открыть дневник' }).click();
+  await page.getByRole('button', { name: /Добавить кофе/ }).click();
+  const name = `E2E quick ${info.project.name} ${Date.now()}`;
+  await page.getByLabel('Название кофе').fill(name);
+  await save(page);
+  const initial = await totals(page);
+  const card = page.locator('article.card').filter({ hasText: name });
+  const requests: any[] = [];
+  // Let the real server commit, then lose only the first response.
+  await page.route('**/api/v1/consumptions', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    requests.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    expect(response.ok()).toBeTruthy();
+    if (requests.length === 1) await route.abort('failed');
+    else await route.fulfill({ response });
+  });
+  await card.getByRole('button', { name: /Выпил чашку/ }).click();
+  await expect(page.getByRole('button', { name: 'Повторить запись чашки' })).toBeVisible();
+  expect((await totals(page)).cups).toBe(initial.cups + 1);
+  await page.getByRole('button', { name: 'Повторить запись чашки' }).click();
+  await expect(page.getByRole('button', { name: 'Отменить чашку' })).toBeEnabled();
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toEqual(requests[1]);
+  expect((await totals(page)).cups).toBe(initial.cups + 1);
+  await page.getByRole('button', { name: 'Отменить чашку' }).click();
+  await expect.poll(async () => (await totals(page)).cups).toBe(initial.cups);
+  await card.getByRole('button', { name: /Выпил чашку/ }).click();
+  await expect(page.getByRole('button', { name: 'Оценить чашку' })).toBeEnabled();
+  expect(requests[2].clientEventId).not.toBe(requests[0].clientEventId);
+  await page.getByRole('button', { name: 'Оценить чашку' }).click();
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Закрыть форму' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await totals(page)).cups).toBe(initial.cups + 1);
+  await page.getByRole('button', { name: 'Оценить чашку' }).click();
+  await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('4');
+  await save(page);
+  expect((await totals(page)).cups).toBe(initial.cups + 1);
+  await expect(page.getByRole('button', { name: 'Оценить чашку' })).toHaveCount(0);
+  await expect(card).toContainText('★ 4.0');
 });

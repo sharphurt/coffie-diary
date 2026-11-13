@@ -21,7 +21,6 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 test.each([
   ['Добавить кофе', 'Новая пачка'],
   ['Выпил другой кофе', 'Ещё одна чашка'],
-  ['Выпил чашку', 'Ещё одна чашка'],
   ['Оценить', 'Как вам кофе?'],
 ])('opens %s without randomUUID', async (button, title) => {
   render(<App />);
@@ -42,4 +41,29 @@ test('failed cup save retains form and event ID for retry', async () => {
   expect(saves).toHaveLength(2);
   expect(saves[0][2]).toEqual(saves[1][2]);
   expect(saves[1][2]).toMatchObject({ volumeMl: 250, bagId: null, clientEventId: expect.any(String) });
+});
+
+
+test('quick cup blocks duplicates while pending and reuses request after failure', async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  const button = await screen.findByRole('button', { name: /Выпил чашку/ });
+  await waitFor(() => expect(button.textContent).toContain('250'));
+  let reject!: (reason: Error) => void;
+  mockApi.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+  await user.click(button);
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await user.click(button);
+  expect(mockApi.mock.calls.filter(([p]) => p === '/consumptions')).toHaveLength(1);
+  reject(new Error('Response lost'));
+  await screen.findByRole('button', { name: 'Повторить запись чашки' });
+  mockApi.mockResolvedValueOnce({ id: 'event', bag_id: 'bag', volume_ml: 250, version: 0 });
+  await user.click(screen.getByRole('button', { name: 'Повторить запись чашки' }));
+  await screen.findByRole('button', { name: 'Отменить чашку' });
+  const requests = mockApi.mock.calls.filter(([p]) => p === '/consumptions');
+  expect(requests).toHaveLength(2);
+  expect(requests[0][2]).toEqual(requests[1][2]);
+  await user.click(screen.getByRole('button', { name: 'Оценить чашку' }));
+  expect(screen.getByRole('dialog').textContent).toContain('Чашка уже учтена');
 });

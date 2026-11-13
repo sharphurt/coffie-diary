@@ -1,0 +1,154 @@
+import { test, expect, type Page } from '@playwright/test';
+
+const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Yekaterinburg' }).format(new Date());
+async function totals(page: Page) {
+  const response = await page.request.get(`/api/v1/consumption-stats?start=${today()}&end=${today()}`);
+  expect(response.ok()).toBeTruthy();
+  return response.json();
+}
+async function save(page: Page) {
+  await page.getByRole('dialog').getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+}
+
+test('diary: create, consume, rate, history, restore, statuses and logout', async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // Exercise the HTTP/LAN fallback in a real browser, without mocking the API.
+  await page.addInitScript(() => Object.defineProperty(Crypto.prototype, 'randomUUID', { value: undefined, configurable: true }));
+  await page.goto('/');
+  await page.getByLabel('Пароль', { exact: true }).fill(process.env.OWNER_PASSWORD!);
+  await page.getByRole('button', { name: 'Открыть дневник' }).click();
+  await expect(page.getByRole('button', { name: /Добавить кофе/ })).toBeVisible();
+  const initial = await totals(page);
+  const name = `E2E ${info.project.name} ${Date.now()}`;
+  await page.getByRole('button', { name: /Добавить кофе/ }).click();
+  await page.getByLabel('Название кофе').fill(name);
+  await expect(page.getByLabel('Масса, г')).toHaveValue('250');
+  await save(page);
+  const card = page.locator('article.card').filter({ hasText: name });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('250 г');
+  await page.reload();
+  await expect(card).toBeVisible();
+
+  await card.getByRole('button', { name: /Выпил чашку/ }).click();
+  await save(page);
+  await expect.poll(async () => (await totals(page)).cups).toBe(initial.cups + 1);
+  await expect(page.locator('.numbers')).toContainText(String(initial.volume + 250));
+
+  await page.getByRole('button', { name: /История/ }).click();
+  const row = page.locator('article.history-row').filter({ hasText: name });
+  await expect(row).toContainText('250 мл');
+  await row.getByRole('button', { name: 'Оценить', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('Чашка уже учтена');
+  await page.getByLabel('Общее впечатление').selectOption('4');
+  await page.getByText('Подробнее о вкусе').click();
+  await page.getByRole('combobox', { name: /^Сладость/ }).selectOption('UNKNOWN');
+  await page.getByLabel('Ваши впечатления').fill(name + ' — понравилось');
+  await save(page);
+  await expect(row.getByRole('button', { name: 'Оценить', exact: true })).toHaveCount(0);
+  expect((await totals(page)).cups).toBe(initial.cups + 1);
+  await page.getByRole('button', { name: 'Оценки', exact: true }).click();
+  await expect(row).toContainText('★ 4/5');
+  const tastings = await (await page.request.get('/api/v1/tastings')).json();
+  const tasting = tastings.find((t: any) => t.comment === name + ' — понравилось');
+  expect(tasting.sensory.acidity).toEqual({ status: 'UNANSWERED', value: null });
+  expect(tasting.sensory.sweetness).toEqual({ status: 'UNKNOWN', value: null });
+  await row.getByRole('button', { name: 'Удалить', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  expect((await totals(page)).cups).toBe(initial.cups + 1);
+  await page.getByLabel('Показать удалённые').check();
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: 'Восстановить', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByLabel('Показать удалённые').uncheck();
+  await expect(row).toContainText('★ 4/5');
+
+  await page.getByRole('button', { name: 'Выпито', exact: true }).click();
+  await row.getByRole('button', { name: 'Удалить', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  expect((await totals(page)).cups).toBe(initial.cups);
+  await page.getByLabel('Показать удалённые').check();
+  await row.getByRole('button', { name: 'Восстановить', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect.poll(async () => (await totals(page)).cups).toBe(initial.cups + 1);
+  await page.getByLabel('Показать удалённые').uncheck();
+
+  await page.getByRole('button', { name: /Сейчас/ }).click();
+  await card.getByRole('button', { name: /Закончить/ }).click();
+  await expect(card).toHaveCount(0);
+  await page.getByRole('button', { name: /История/ }).click();
+  await page.getByRole('button', { name: 'Пачки', exact: true }).click();
+  await expect(row).toContainText('FINISHED');
+  await row.getByRole('button', { name: 'Открыть', exact: true }).click();
+  await expect(row).toContainText('ACTIVE');
+  await row.getByRole('button', { name: 'Купил ещё', exact: true }).click();
+  await save(page);
+  await expect(row).toHaveCount(2);
+  await page.getByRole('button', { name: /Сейчас/ }).click();
+  await expect(card).toHaveCount(2);
+
+  await page.getByRole('button', { name: /Выпил другой кофе/ }).click();
+  await page.getByLabel('Объём напитка, мл').fill('200');
+  await page.getByLabel('Что пили?').fill(name + ' неизвестный');
+  await save(page);
+  const final = await totals(page);
+  expect(final.cups).toBe(initial.cups + 2);
+  expect(final.volume).toBe(initial.volume + 450);
+  await page.reload();
+  await expect(page.locator('.numbers')).toContainText(String(final.volume));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  await page.getByRole('button', { name: /Выйти/ }).click();
+  await expect(page.getByRole('button', { name: 'Открыть дневник' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect((await page.request.get('/api/v1/bags')).status()).toBe(401);
+  expect(errors).toEqual([]);
+});
+
+
+test('cancel, stock opening, standalone rating and settings', async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto('/');
+  await page.getByLabel('Пароль', { exact: true }).fill(process.env.OWNER_PASSWORD!);
+  await page.getByRole('button', { name: 'Открыть дневник' }).click();
+  await expect(page.getByRole('button', { name: /Добавить кофе/ })).toBeVisible();
+  const initial = await totals(page);
+  const name = `E2E stock ${info.project.name} ${Date.now()}`;
+  await page.getByRole('button', { name: /Добавить кофе/ }).click();
+  await page.getByLabel('Название кофе').fill(name);
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Закрыть форму' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText(name, { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: /Добавить кофе/ }).click();
+  await page.getByLabel('Название кофе').fill(name);
+  await page.getByRole('combobox', { name: 'Статус' }).selectOption('STOCK');
+  await save(page);
+  await page.locator('details.stock summary').click();
+  const stock = page.locator('.stock .history-row').filter({ hasText: name });
+  await stock.getByRole('button', { name: 'Открыть пачку' }).click();
+  const card = page.locator('article.card').filter({ hasText: name });
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: 'Оценить', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('4');
+  await save(page);
+  expect((await totals(page)).cups).toBe(initial.cups);
+  await expect(card).toContainText('★ 4.0');
+  await page.getByRole('button', { name: /Настройки/ }).click();
+  await page.getByLabel('Объём выпитой чашки, мл').fill('200');
+  await page.getByRole('button', { name: 'Сохранить настройки' }).click();
+  await expect(page.getByRole('status')).toContainText('Сохранено');
+  await expect.poll(async () => (await (await page.request.get('/api/v1/profile')).json()).default_cup_volume_ml).toBe(200);
+  await page.getByRole('button', { name: /Сейчас/ }).click();
+  await expect(card.getByRole('button', { name: 'Выпил чашку · 200 мл' })).toBeVisible();
+  await page.getByRole('button', { name: /Настройки/ }).click();
+  await page.getByLabel('Объём выпитой чашки, мл').fill('250');
+  await page.getByRole('button', { name: 'Сохранить настройки' }).click();
+  await expect.poll(async () => (await (await page.request.get('/api/v1/profile')).json()).default_cup_volume_ml).toBe(250);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

@@ -84,6 +84,7 @@ public class Api {
   }
 
   @PostMapping("/{kind:bags|lots|tastings|consumptions}/{id}/restore")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
   public void restore(
       Principal p,
       @PathVariable String kind,

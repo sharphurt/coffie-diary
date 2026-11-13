@@ -73,12 +73,12 @@ export function App() {
     window.addEventListener("beforeunload", f);
     return () => window.removeEventListener("beforeunload", f);
   }, [modal]);
-  async function run(fn: () => Promise<unknown>, message = "Сохранено") {
+  async function run(fn: () => Promise<unknown>, message = "Сохранено", reload = true) {
     setBusy(true);
     setError("");
     try {
       await fn();
-      await refresh();
+      if (reload) await refresh();
       setNotice(message);
     } catch (e) {
       setError((e as Error).message);
@@ -263,7 +263,7 @@ export function App() {
                 await api("/auth/logout", "POST");
                 setUser(null);
                 await refreshCsrf();
-              })
+              }, "", false)
             }
           >
             Выйти ↗

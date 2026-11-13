@@ -7,3 +7,5 @@ data/
 docs/*-live.html
 test-results/
 backend/src/main/resources/static/
+
+**/playwright-report/

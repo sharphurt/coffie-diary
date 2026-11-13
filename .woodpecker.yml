@@ -1,0 +1,29 @@
+when:
+  - event: [push, manual]
+    branch: master
+
+steps:
+  - name: frontend
+    image: node:24.20.0-alpine
+    commands:
+      - cd frontend
+      - npm ci
+      - npm run build
+
+  - name: backend
+    image: maven:3.9.11-eclipse-temurin-21
+    commands:
+      - mvn -B -ntp -f backend/pom.xml verify
+
+  - name: deploy
+    image: curlimages/curl:8.16.0
+    environment:
+      COOLIFY_TOKEN:
+        from_secret: coolify_deploy_token
+    commands:
+      - >-
+        curl --fail-with-body --silent --show-error
+        --connect-timeout 15 --max-time 60
+        --request POST
+        --header "Authorization: Bearer $${COOLIFY_TOKEN}"
+        'http://coolify:8080/api/v1/deploy?uuid=7pbn703jgbxinrllz3pyqlgf'

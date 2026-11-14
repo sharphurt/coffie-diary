@@ -154,6 +154,11 @@ public class Api {
     return service.bagStatusHistory(owner(p), id);
   }
 
+  @PutMapping("/bags/{id}/final-impression")
+  public Object finalImpression(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> input) {
+    return service.finalImpression(owner(p), id, input);
+  }
+
   @PatchMapping("/consumptions/{id}")
   public Object editConsumption(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
     return service.editConsumption(owner(p), id, in);

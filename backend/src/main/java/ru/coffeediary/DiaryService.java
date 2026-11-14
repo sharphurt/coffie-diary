@@ -599,12 +599,33 @@ public class DiaryService {
     return rows("select * from bag_status_event where bag_id=? order by changed_at,id", id);
   }
 
+  @Transactional
+  public Map<String, Object> finalImpression(UUID owner, UUID id, Map<String, Object> input) {
+    var bag = editable("coffee_bag", owner, id, input);
+    active("personal_lot", uuid(bag.get("lot_id")), owner);
+    Integer rating = input.get("finalRating") == null ? null
+        : Rules.number(input.get("finalRating"), "finalRating", 1, 5, true).intValue();
+    db.update("update coffee_bag set final_rating=?,final_repurchase=?,final_comment=?,"
+            + "version=version+1,updated_at=now() where id=? and owner_id=?",
+        rating, choice(input.get("finalRepurchase"), "finalRepurchase", List.of("YES", "MAYBE", "NO")),
+        Rules.text(input, "finalComment", 5000, false), id, owner);
+    return row("coffee_bag", id, owner);
+  }
+
   public List<Map<String, Object>> list(
       UUID owner, String kind, int limit, int offset, boolean deleted, String query,
       LocalDate start, LocalDate end) {
     limit = Math.clamp(limit, 1, 100);
     offset = Math.max(0, offset);
     String condition = deleted ? " is not null" : " is null";
+    if (kind.equals("lots"))
+      return rows("select l.*, summary.rating, summary.rated_bags from personal_lot l"
+          + " cross join lateral (select avg(bag_rating) rating,count(bag_rating) rated_bags"
+          + " from (select avg(t.overall_rating) bag_rating from coffee_bag b"
+          + " join tasting t on t.bag_id=b.id and t.owner_id=b.owner_id and t.deleted_at is null"
+          + " where b.lot_id=l.id and b.owner_id=l.owner_id and b.deleted_at is null"
+          + " group by b.id) rated) summary where l.owner_id=? and l.deleted_at" + condition
+          + " order by l.created_at desc,l.id limit ? offset ?", owner, limit, offset);
     if (kind.equals("consumptions")) {
       var args = new ArrayList<Object>();
       args.add(owner);

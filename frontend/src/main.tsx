@@ -293,6 +293,13 @@ export function App() {
         await api(`/consumptions/${m.event.id}/tasting-link`, "PUT", {
           tastingId: v.tastingId, version: m.event.version,
         });
+      if (m.type === "finalImpression")
+        await api(`/bags/${m.record.id}/final-impression`, "PUT", {
+          version: m.record.version,
+          finalRating: v.finalRating ? Number(v.finalRating) : null,
+          finalRepurchase: v.finalRepurchase || null,
+          finalComment: v.finalComment,
+        });
       if (m.type === "lot") {
         await api(m.record ? `/lots/${m.record.id}` : "/lots", m.record ? "PATCH" : "POST",
           { ...v, ...(m.record ? { version: m.record.version } : {}) }, m.record ? undefined : m.key);
@@ -609,11 +616,13 @@ export function App() {
                           disabled={busy}
                           onClick={() =>
                             run(
-                              () =>
-                                api(`/bags/${b.id}/status`, "POST", {
+                              async () => {
+                                const finished = await api(`/bags/${b.id}/status`, "POST", {
                                   status: "FINISHED",
                                   version: b.version,
-                                }),
+                                });
+                                open("finalImpression", { record: finished, name: b.name });
+                              },
                               "Пачка завершена. История сохранена.",
                             )
                           }
@@ -742,6 +751,17 @@ export function App() {
                         : r.status || "Личный лот"}
                   </p>
                   {r.comment && <p>{r.comment}</p>}
+                  {kind === "lots" && <p>{r.rated_bags
+                    ? `Рейтинг лота: ${sensoryNumber.format(r.rating)} из 5 · оценённых пачек: ${r.rated_bags}`
+                    : "Ещё нет оценок"}</p>}
+                  {kind === "bags" && <>
+                    <p>{r.tasting_count ? `Средняя оценка чашек: ${sensoryNumber.format(r.rating)} из 5 · оценок: ${r.tasting_count}` : "Ещё нет оценок чашек"}</p>
+                    {(r.final_rating != null || r.final_repurchase || r.final_comment) && <p>
+                      Итоговое впечатление{r.final_rating != null && `: ${r.final_rating} из 5`}
+                      {r.final_repurchase && ` · Повторная покупка: ${({ YES: "да", MAYBE: "возможно", NO: "нет" } as Row)[r.final_repurchase]}`}
+                      {r.final_comment && <><br />{r.final_comment}</>}
+                    </p>}
+                  </>}
                   {kind === "tastings" && r.wishes?.length > 0 && <p>
                     {r.wishes.map((wish: keyof typeof tasteWishes) => tasteWishes[wish]).join(", ")}
                   </p>}
@@ -794,6 +814,7 @@ export function App() {
                   {kind === "bags" && !deleted && (
                     <>
                       <button onClick={() => open("photos", { record: r })}>Фото</button>
+                      <button disabled={busy} onClick={() => open("finalImpression", { record: r, name: r.name })}>Итоговое впечатление</button>
                       <button disabled={busy} onClick={() => open("bag", { record: r, lotId: r.lot_id, name: r.name })}>Изменить пачку</button>
                       <button
                         onClick={() =>
@@ -981,7 +1002,8 @@ export function App() {
             </button>
             <p className="eyebrow">МОЙ КОФЕ</p>
             <h2 id="dialog-title">
-              {modal.type === "linkTasting" ? "Привязать оценку"
+              {modal.type === "finalImpression" ? "Итоговое впечатление о пачке"
+                : modal.type === "linkTasting" ? "Привязать оценку"
                 : modal.type === "photos" ? "Фото пачки"
                 : modal.type === "lot" ? (modal.record ? "Изменить лот" : "Новый лот")
                 : modal.type === "bag"
@@ -996,6 +1018,24 @@ export function App() {
               await refresh();
               setModal(null);
             }} /> : <form onSubmit={save}>
+              {modal.type === "finalImpression" && <>
+                <label>Итоговая оценка пачки
+                  <select name="finalRating" defaultValue={modal.record.final_rating ?? ""}>
+                    <option value="">Без оценки</option>
+                    {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value} из 5</option>)}
+                  </select>
+                </label>
+                <label>Купили бы снова?
+                  <select name="finalRepurchase" defaultValue={modal.record.final_repurchase ?? ""}>
+                    <option value="">Не указано</option><option value="YES">Да</option>
+                    <option value="MAYBE">Возможно</option><option value="NO">Нет</option>
+                  </select>
+                </label>
+                <label>Комментарий о пачке
+                  <textarea name="finalComment" maxLength={5000} defaultValue={modal.record.final_comment ?? ""} />
+                </label>
+                <button type="button" onClick={() => setModal(null)} disabled={busy}>Пропустить</button>
+              </>}
               {modal.type === "linkTasting" && (
                 modal.ratings.length ? <label>Существующая оценка
                   <select name="tastingId" required defaultValue="">

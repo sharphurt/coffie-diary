@@ -133,6 +133,7 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
 
   await page.getByRole('button', { name: /Сейчас/ }).click();
   await card.getByRole('button', { name: /Закончить/ }).click();
+  await page.getByRole('button', { name: 'Пропустить', exact: true }).click();
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: /История/ }).click();
   await page.getByRole('button', { name: 'Пачки', exact: true }).click();
@@ -494,6 +495,7 @@ test('sensory averages count only measured values and update after deletion', as
   await expect(card.getByText('Кислотность: 4 из 5 (1 изм.)')).toBeVisible();
   await expect(card.getByText(/Сладость:/)).toHaveCount(0);
   await test.step('AC-08 form and API validation', () => checkValidation(page, info.project.name));
+  await test.step('final impressions and equal weight per rated bag', () => checkLotRating(page));
   await test.step('create and edit lots and bags separately', () => checkLotAndBagEditing(page, info.project.name));
 });
 
@@ -711,4 +713,44 @@ async function expandTasting(page: Page) {
   if (!(await summary.evaluate(element => (element.parentElement as HTMLDetailsElement).open))) {
     await summary.click();
   }
+}
+
+async function checkLotRating(page: Page) {
+  const get = async (path: string) => (await page.request.get('/api/v1' + path)).json();
+  const csrf = await get('/auth/csrf');
+  async function create(path: string, data: Record<string, unknown>) {
+    const response = await page.request.post('/api/v1' + path, {
+      data, headers: { [csrf.headerName]: csrf.token, 'Idempotency-Key': crypto.randomUUID() },
+    });
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  }
+  const name = 'E2E equal weights ' + crypto.randomUUID();
+  const a = await create('/bags', { name });
+  const b = await create('/bags', { lotId: a.lot_id, status: 'STOCK' });
+  await create('/bags', { lotId: a.lot_id, status: 'STOCK' });
+  const readLot = async () => (await get('/lots')).find((lot: { id: string }) => lot.id === a.lot_id);
+  expect(await readLot()).toMatchObject({ rating: null, rated_bags: 0 });
+  for (const rating of [1, 2, 3]) await create('/tastings', { bagId: a.id, overallRating: rating });
+  await create('/tastings', { bagId: b.id, overallRating: 4 });
+  await page.reload();
+  const card = page.locator('article.card').filter({ hasText: name });
+  await card.getByRole('button', { name: /Закончить/ }).click();
+  await page.getByRole('combobox', { name: 'Итоговая оценка пачки' }).selectOption('5');
+  await page.getByRole('combobox', { name: 'Купили бы снова?' }).selectOption('YES');
+  await page.getByLabel('Комментарий о пачке').fill('Возьму ещё');
+  await save(page);
+  expect(await get('/bags/' + a.id)).toMatchObject({
+    status: 'FINISHED', final_rating: 5, final_repurchase: 'YES', final_comment: 'Возьму ещё',
+  });
+  const lot = await readLot();
+  expect(Number(lot.rating)).toBe(3);
+  expect(Number(lot.rated_bags)).toBe(2);
+  await page.getByRole('button', { name: /История/ }).click();
+  await page.getByRole('button', { name: 'Лоты', exact: true }).click();
+  await expect(page.locator('article.history-row').filter({ hasText: name }).getByText('Рейтинг лота: 3 из 5 · оценённых пачек: 2')).toBeVisible();
+  await page.getByRole('button', { name: 'Пачки', exact: true }).click();
+  const finished = page.locator('article.history-row').filter({ hasText: name }).filter({ hasText: 'Возьму ещё' });
+  await expect(finished).toContainText('Средняя оценка чашек: 2 из 5 · оценок: 3');
+  await expect(finished).toContainText('Итоговое впечатление: 5 из 5');
 }

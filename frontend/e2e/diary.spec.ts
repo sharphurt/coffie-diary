@@ -96,6 +96,32 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   await expect(row).toContainText('★ 4/5');
 
   await page.getByRole('button', { name: 'Выпито', exact: true }).click();
+  await row.getByRole('button', { name: 'Привязать оценку', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Существующая оценка' }).selectOption(tasting.id);
+  await save(page);
+  await expect(row.getByRole('button', { name: 'Отвязать оценку' })).toBeVisible();
+  const cups = await (await page.request.get('/api/v1/consumptions')).json();
+  const linked = cups.find((cup: { tasting_id: string }) => cup.tasting_id === tasting.id);
+  expect(linked.bag_id).toBe(tasting.bag_id);
+  const linkCsrf = await (await page.request.get('/api/v1/auth/csrf')).json();
+  const linkHeaders = { [linkCsrf.headerName]: linkCsrf.token, 'Idempotency-Key': crypto.randomUUID() };
+  const otherBag = await (await page.request.post('/api/v1/bags', {
+    headers: linkHeaders, data: { name: 'E2E unrelated ' + crypto.randomUUID(), status: 'STOCK' },
+  })).json();
+  const otherRating = await (await page.request.post('/api/v1/tastings', {
+    headers: { ...linkHeaders, 'Idempotency-Key': crypto.randomUUID() },
+    data: { bagId: otherBag.id, overallRating: 4 },
+  })).json();
+  await row.getByRole('button', { name: 'Отвязать оценку' }).click();
+  await expect(row.getByRole('button', { name: 'Привязать оценку', exact: true })).toBeVisible();
+  const unlinked = await (await page.request.get(`/api/v1/consumptions/${linked.id}`)).json();
+  expect(unlinked.tasting_id).toBeNull();
+  const wrongBag = await page.request.put(`/api/v1/consumptions/${linked.id}/tasting-link`, {
+    headers: linkHeaders, data: { version: unlinked.version, tastingId: otherRating.id },
+  });
+  expect(wrongBag.status()).toBe(409);
+  expect((await page.request.get(`/api/v1/tastings/${tasting.id}`)).ok()).toBeTruthy();
+  expect(await totals(page)).toMatchObject({ cups: initial.cups + 1, volume: initial.volume + 250 });
   await row.getByRole('button', { name: 'Удалить', exact: true }).click();
   await expect(row).toHaveCount(0);
   expect((await totals(page)).cups).toBe(initial.cups);

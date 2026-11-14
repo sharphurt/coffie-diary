@@ -284,6 +284,31 @@ public class DiaryService {
     return row("consumption_event", id, owner);
   }
 
+  public Object eligibleTastings(UUID owner, UUID id) {
+    var cup = row("consumption_event", id, owner);
+    if (cup.get("deleted_at") != null || cup.get("bag_id") == null) return List.of();
+    return rows("select t.id,t.overall_rating,t.tasted_at,t.comment from tasting t"
+        + " where t.owner_id=? and t.bag_id=? and t.deleted_at is null"
+        + " and not exists (select 1 from consumption_event c where c.tasting_id=t.id)"
+        + " order by t.tasted_at desc,t.id", owner, cup.get("bag_id"));
+  }
+
+  @Transactional
+  public Map<String, Object> changeTastingLink(UUID owner, UUID id, UUID tasting, Map<String, Object> input) {
+    var cup = editable("consumption_event", owner, id, input);
+    if (tasting != null) {
+      var rating = row("tasting", tasting, owner);
+      if (cup.get("tasting_id") != null || rating.get("deleted_at") != null
+          || !Objects.equals(cup.get("bag_id"), rating.get("bag_id"))
+          || Boolean.TRUE.equals(db.queryForObject(
+              "select exists(select 1 from consumption_event where tasting_id=?)", Boolean.class, tasting)))
+        throw new ResponseStatusException(HttpStatus.CONFLICT, "Оценку нельзя связать с этой чашкой");
+    }
+    db.update("update consumption_event set tasting_id=?,version=version+1,updated_at=now()"
+        + " where id=? and owner_id=?", tasting, id, owner);
+    return row("consumption_event", id, owner);
+  }
+
   @Transactional
   public Map<String, Object> editTasting(UUID owner, UUID id, Map<String, Object> in) {
     db.queryForObject("select id from app_user where id=? for update", UUID.class, owner);

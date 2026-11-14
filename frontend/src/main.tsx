@@ -257,6 +257,10 @@ export function App() {
       v = Object.fromEntries(f.entries()),
       m = modal!;
     await run(async () => {
+      if (m.type === "linkTasting")
+        await api(`/consumptions/${m.event.id}/tasting-link`, "PUT", {
+          tastingId: v.tastingId, version: m.event.version,
+        });
       if (m.type === "lot") {
         await api(m.record ? `/lots/${m.record.id}` : "/lots", m.record ? "PATCH" : "POST",
           { ...v, ...(m.record ? { version: m.record.version } : {}) }, m.record ? undefined : m.key);
@@ -710,6 +714,20 @@ export function App() {
                       Изменить
                     </button>
                   )}
+                  {kind === "consumptions" && !deleted && r.tasting_id && (
+                    <button disabled={busy} onClick={() => run(() =>
+                      api(`/consumptions/${r.id}/tasting-link?version=${r.version}`, "DELETE"))}>
+                      Отвязать оценку
+                    </button>
+                  )}
+                  {kind === "consumptions" && !deleted && r.bag_id && !r.bag_deleted && !r.tasting_id && (
+                    <button disabled={busy} onClick={async () => {
+                      try {
+                        const ratings = await api(`/consumptions/${r.id}/eligible-tastings`);
+                        open("linkTasting", { event: r, ratings });
+                      } catch (failure) { setError((failure as Error).message); }
+                    }}>Привязать оценку</button>
+                  )}
                   {kind === "consumptions" &&
                     r.bag_id &&
                     !r.bag_deleted &&
@@ -884,7 +902,8 @@ export function App() {
             </button>
             <p className="eyebrow">МОЙ КОФЕ</p>
             <h2 id="dialog-title">
-              {modal.type === "photos" ? "Фото пачки"
+              {modal.type === "linkTasting" ? "Привязать оценку"
+                : modal.type === "photos" ? "Фото пачки"
                 : modal.type === "lot" ? (modal.record ? "Изменить лот" : "Новый лот")
                 : modal.type === "bag"
                 ? (modal.record ? "Изменить пачку" : "Новая пачка")
@@ -898,6 +917,16 @@ export function App() {
               await refresh();
               setModal(null);
             }} /> : <form onSubmit={save}>
+              {modal.type === "linkTasting" && (
+                modal.ratings.length ? <label>Существующая оценка
+                  <select name="tastingId" required defaultValue="">
+                    <option value="" disabled>Выберите оценку</option>
+                    {modal.ratings.map((rating: Row) => <option key={rating.id} value={rating.id}>
+                      {format(rating.tasted_at)} · {rating.overall_rating}/5 {rating.comment?.slice(0, 80)}
+                    </option>)}
+                  </select>
+                </label> : <p>У этой пачки пока нет свободных оценок.</p>
+              )}
               {(modal.type === "lot" || (modal.type === "bag" && !modal.lotId)) && (
                     <>
                       <label>
@@ -1096,7 +1125,7 @@ export function App() {
                   {error}
                 </p>
               )}
-              <button className="primary wide" disabled={busy}>
+              <button className="primary wide" disabled={busy || (modal.type === "linkTasting" && !modal.ratings.length)}>
                 {busy ? "Сохраняем…" : "Сохранить"}
               </button>
             </form>}

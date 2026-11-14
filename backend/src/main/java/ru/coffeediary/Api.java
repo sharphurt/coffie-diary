@@ -133,6 +133,21 @@ public class Api {
     return service.editConsumption(owner(p), id, in);
   }
 
+  @GetMapping("/consumptions/{id}/eligible-tastings")
+  public Object eligibleTastings(Principal p, @PathVariable UUID id) {
+    return service.eligibleTastings(owner(p), id);
+  }
+
+  @PutMapping("/consumptions/{id}/tasting-link")
+  public Object linkTasting(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> input) {
+    return service.changeTastingLink(owner(p), id, service.uuid(input.get("tastingId")), input);
+  }
+
+  @DeleteMapping("/consumptions/{id}/tasting-link")
+  public Object unlinkTasting(Principal p, @PathVariable UUID id, @RequestParam long version) {
+    return service.changeTastingLink(owner(p), id, null, Map.of("version", version));
+  }
+
   @PatchMapping("/tastings/{id}")
   public Object editTasting(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
     return service.editTasting(owner(p), id, in);

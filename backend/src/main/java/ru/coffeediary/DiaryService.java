@@ -612,45 +612,50 @@ public class DiaryService {
     return row("coffee_bag", id, owner);
   }
 
-  public List<Map<String, Object>> list(
-      UUID owner, String kind, int limit, int offset, boolean deleted, String query,
-      LocalDate start, LocalDate end) {
-    limit = Math.clamp(limit, 1, 100);
-    offset = Math.max(0, offset);
+  private static final String CUP_JOINS =
+      " from consumption_event c left join coffee_bag b on b.id=c.bag_id and b.owner_id=c.owner_id"
+          + " left join personal_lot l on l.id=b.lot_id and l.owner_id=b.owner_id";
+
+  private String search(String query) {
+    return "%" + query.strip().replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+  }
+
+  private String cupFilter(String coffee) {
+    return switch (Objects.toString(coffee, "")) {
+      case "" -> "";
+      case "known" -> " and c.bag_id is not null";
+      case "unknown" -> " and c.bag_id is null";
+      default -> throw new Rules.Invalid("coffee", "Недопустимый фильтр кофе");
+    };
+  }
+
+  public List<Map<String, Object>> list(UUID owner, String kind, int limit, int offset,
+      boolean deleted, String query, LocalDate start, LocalDate end, String status,
+      Integer rating, String coffee, String sort) {
     String condition = deleted ? " is not null" : " is null";
-    if (kind.equals("lots"))
-      return rows("select l.*, summary.rating, summary.rated_bags from personal_lot l"
+    String source = switch (kind) {
+      case "lots" -> "select l.*, summary.rating, summary.rated_bags, l.created_at history_date,"
+          + " greatest(l.updated_at, (select max(b.updated_at) from coffee_bag b where b.lot_id=l.id and b.deleted_at is null),"
+          + " (select max(c.consumed_at) from coffee_bag b join consumption_event c on c.bag_id=b.id"
+          + " where b.lot_id=l.id and b.deleted_at is null and c.deleted_at is null)) recent from personal_lot l"
           + " cross join lateral (select avg(bag_rating) rating,count(bag_rating) rated_bags"
           + " from (select avg(t.overall_rating) bag_rating from coffee_bag b"
           + " join tasting t on t.bag_id=b.id and t.owner_id=b.owner_id and t.deleted_at is null"
           + " where b.lot_id=l.id and b.owner_id=l.owner_id and b.deleted_at is null"
-          + " group by b.id) rated) summary where l.owner_id=? and l.deleted_at" + condition
-          + " order by l.created_at desc,l.id limit ? offset ?", owner, limit, offset);
-    if (kind.equals("consumptions")) {
-      var args = new ArrayList<Object>();
-      args.add(owner);
-      String period = "";
-      if (start != null || end != null) {
-        validatePeriod(start, end);
-        ZoneId zone = ownerZone(owner);
-        period = " and c.consumed_at>=? and c.consumed_at<?";
-        args.add(midnight(start, zone));
-        args.add(midnight(end.plusDays(1), zone));
-      }
-      args.add(limit);
-      args.add(offset);
-      return rows(
-          "select c.*, (b.deleted_at is not null or l.deleted_at is not null) bag_deleted,"
-              + " case when b.deleted_at is null and l.deleted_at is null then l.name end bag_name"
-              + " from consumption_event c left join coffee_bag b on b.id=c.bag_id and b.owner_id=c.owner_id"
-              + " left join personal_lot l on l.id=b.lot_id and l.owner_id=b.owner_id"
-              + " where c.owner_id=? and c.deleted_at" + condition + period
-              + " order by c.consumed_at desc,c.id limit ? offset ?",
-          args.toArray());
-    }
-    if (kind.equals("bags"))
-      return rows(
-          "select b.*,l.name,l.roaster_name,(select avg(t.overall_rating) from tasting t where"
+          + " group by b.id) rated) summary where l.owner_id=? and l.deleted_at" + condition;
+      case "consumptions" -> "select c.*, coalesce(l.name,c.coffee_label) name,l.roaster_name,"
+          + " (b.deleted_at is not null or l.deleted_at is not null) bag_deleted,"
+          + " case when b.deleted_at is null and l.deleted_at is null then l.name end bag_name,"
+          + " c.consumed_at history_date,c.consumed_at recent,null::numeric rating"
+          + CUP_JOINS + " where c.owner_id=? and c.deleted_at" + condition + cupFilter(coffee);
+      case "tastings" -> "select t.*,l.name,l.roaster_name,t.tasted_at history_date,t.tasted_at recent,t.overall_rating rating"
+          + " from tasting t join coffee_bag b on b.id=t.bag_id and b.owner_id=t.owner_id"
+          + " join personal_lot l on l.id=b.lot_id and l.owner_id=b.owner_id"
+          + " where t.owner_id=? and t.deleted_at" + condition;
+      case "bags" ->
+          "select b.*,l.name,l.roaster_name,coalesce(b.purchased_on::timestamp at time zone u.timezone,b.created_at) history_date,"
+              + " greatest(b.updated_at,(select max(c.consumed_at) from consumption_event c where c.bag_id=b.id"
+              + " and c.deleted_at is null)) recent,(select avg(t.overall_rating) from tasting t where"
               + " t.bag_id=b.id and t.deleted_at is null) rating,(select count(*) from tasting t"
               + " where t.bag_id=b.id and t.deleted_at is null) tasting_count,"
               + " (select coalesce(jsonb_object_agg(dimension,jsonb_build_object('average',mean,'count',n)),"
@@ -664,25 +669,43 @@ public class DiaryService {
               + " order by position,id limit 1) photo_id,"
               + " (select jsonb_build_object('ids',coalesce(jsonb_agg(m.id order by position,id),'[]'::jsonb))"
               + " from media_asset m where m.bag_id=b.id and m.owner_id=b.owner_id) photos"
-              + " from coffee_bag b join personal_lot l on l.id=b.lot_id where"
+              + " from coffee_bag b join personal_lot l on l.id=b.lot_id join app_user u on u.id=b.owner_id where"
               + " b.owner_id=? and b.deleted_at"
               + condition
-              + " and l.deleted_at is null and (l.name ilike ? or coalesce(l.roaster_name,'') ilike"
-              + " ?) order by b.updated_at desc,b.id limit ? offset ?",
-          owner,
-          "%" + query + "%",
-          "%" + query + "%",
-          limit,
-          offset);
-    return rows(
-        "select * from "
-            + table(kind)
-            + " where owner_id=? and deleted_at"
-            + condition
-            + " order by created_at desc,id limit ? offset ?",
-        owner,
-        limit,
-        offset);
+          + " and l.deleted_at is null";
+      default -> throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+    };
+    var args = new ArrayList<Object>();
+    args.add(owner);
+    args.add(search(query));
+    args.add(search(query));
+    String sql = "select * from (" + source + ") h where (h.name ilike ? escape '!'"
+        + " or h.roaster_name ilike ? escape '!' or ? = '%%')";
+    args.add(search(query));
+    if (start != null || end != null) {
+      validatePeriod(start, end);
+      ZoneId zone = ownerZone(owner);
+      sql += " and history_date>=? and history_date<?";
+      args.add(midnight(start, zone));
+      args.add(midnight(end.plusDays(1), zone));
+    }
+    if (status != null && !status.isBlank() && kind.equals("bags")) {
+      sql += " and status=?";
+      args.add(choice(status, "status", List.of("ACTIVE", "STOCK", "FINISHED")));
+    }
+    if (rating != null && !kind.equals("consumptions")) {
+      sql += " and round(rating)=?";
+      args.add(Rules.number(rating, "rating", 1, 5, true).intValue());
+    }
+    String order = switch (Objects.toString(sort, "")) {
+      case "", "recent" -> "recent desc";
+      case "rating" -> "rating desc nulls last,recent desc";
+      case "name" -> "lower(name) asc nulls last,recent desc";
+      default -> throw new Rules.Invalid("sort", "Недопустимый порядок сортировки");
+    };
+    args.add(Math.clamp(limit, 1, 100));
+    args.add(Math.max(0, offset));
+    return rows(sql + " order by " + order + ",id limit ? offset ?", args.toArray());
   }
 
   private void validatePeriod(LocalDate start, LocalDate end) {
@@ -698,18 +721,20 @@ public class DiaryService {
     return Timestamp.from(date.atStartOfDay(zone).toInstant());
   }
 
-  public Map<String, Object> stats(UUID owner, LocalDate start, LocalDate end) {
+  public Map<String, Object> stats(UUID owner, LocalDate start, LocalDate end, String query, String coffee) {
     validatePeriod(start, end);
     ZoneId zone = ownerZone(owner);
     var points =
         rows(
-            "select (consumed_at at time zone ?)::date as local_day,count(*) cups,sum(volume_ml)"
-                + " volume from consumption_event where owner_id=? and deleted_at is null and"
-                + " consumed_at>=? and consumed_at<? group by local_day order by local_day",
+            "select (consumed_at at time zone ?)::date as local_day,count(*) cups,sum(c.volume_ml)"
+                + " volume" + CUP_JOINS + " where c.owner_id=? and c.deleted_at is null and"
+                + " c.consumed_at>=? and c.consumed_at<?" + cupFilter(coffee)
+                + " and (coalesce(l.name,c.coffee_label) ilike ? escape '!' or l.roaster_name ilike ? escape '!' or ? = '%%')"
+                + " group by local_day order by local_day",
             zone.getId(),
             owner,
             midnight(start, zone),
-            midnight(end.plusDays(1), zone));
+            midnight(end.plusDays(1), zone), search(query), search(query), search(query));
     var days = new ArrayList<Map<String, Object>>();
     long count = 0, volume = 0;
     for (LocalDate d = start; !d.isAfter(end); d = d.plusDays(1)) {

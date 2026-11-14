@@ -416,11 +416,12 @@ test('cup history filters rows and totals by the same local day', async ({ page 
   await expect(page.getByText(label + ' inside', { exact: true })).toBeVisible();
   await expect(page.getByText(label + ' before', { exact: true })).toHaveCount(0);
   await expect(page.getByText(label + ' after', { exact: true })).toHaveCount(0);
-  await expect(page.getByText(/123 мл за период|246 мл за период/)).toBeVisible();
+  await page.getByLabel('Поиск по названию или обжарщику').fill(label);
+  await expect(page.getByText('1 чашек · 123 мл за период')).toBeVisible();
   const row = page.locator('article.history-row').filter({ hasText: label + ' inside' });
   const records = await (await page.request.get('/api/v1/consumptions?start=2020-01-02&end=2020-01-02')).json();
   const original = records.find((record: { coffee_label: string }) => record.coffee_label === label + ' inside');
-  const before = await (await page.request.get('/api/v1/consumption-stats?start=2020-01-02&end=2020-01-02')).json();
+  const before = await (await page.request.get('/api/v1/consumption-stats?start=2020-01-02&end=2020-01-02&q=' + encodeURIComponent(label))).json();
   await row.getByRole('button', { name: 'Изменить', exact: true }).click();
   await expect(page.getByLabel(/Дата и время/)).toHaveValue('2020-01-02T00:00');
   await page.getByLabel('Объём напитка, мл').fill('321');
@@ -438,6 +439,34 @@ test('cup history filters rows and totals by the same local day', async ({ page 
   await save(page);
   await expect(row).toHaveCount(0);
   await expect(page.getByText(`${before.cups - 1} чашек · ${before.volume - 123} мл за период`)).toBeVisible();
+  const bagResponse = await page.request.post('/api/v1/bags', {
+    headers: { [csrf.headerName]: csrf.token, 'Idempotency-Key': crypto.randomUUID() },
+    data: { name: label + ' known' },
+  });
+  expect(bagResponse.ok()).toBeTruthy();
+  const bag = await bagResponse.json();
+  for (const data of [{ bagId: bag.id, volumeMl: 250 }, { coffeeLabel: label + ' unknown', volumeMl: 200 }]) {
+    const added = await page.request.post('/api/v1/consumptions', {
+      headers: { [csrf.headerName]: csrf.token },
+      data: { ...data, clientEventId: crypto.randomUUID(), consumedAt: '2020-01-02T08:00:00Z' },
+    });
+    expect(added.ok()).toBeTruthy();
+  }
+  await page.getByRole('combobox', { name: 'Известность лота' }).selectOption('known');
+  await page.getByRole('combobox', { name: 'Известность лота' }).selectOption('');
+  const coffee = page.getByRole('combobox', { name: 'Известность лота' });
+  await expect(page.getByText('2 чашек · 450 мл за период')).toBeVisible();
+  await coffee.selectOption('known');
+  await expect(page.getByText('1 чашек · 250 мл за период')).toBeVisible();
+  await expect(page.getByText(label + ' known', { exact: true })).toBeVisible();
+  await expect(page.getByText(label + ' unknown', { exact: true })).toHaveCount(0);
+  await coffee.selectOption('unknown');
+  await expect(page.getByText('1 чашек · 200 мл за период')).toBeVisible();
+  await expect(page.getByText(label + ' unknown', { exact: true })).toBeVisible();
+  await expect(page.getByText(label + ' known', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
+  await expect(coffee).toHaveValue('');
+  await expect(page.getByLabel('Поиск по названию или обжарщику')).toHaveValue('');
   await page.getByRole('button', { name: 'Сегодня', exact: true }).click();
   await expect(page.getByText(label + ' inside', { exact: true })).toHaveCount(0);
 });
@@ -475,7 +504,7 @@ test('sensory averages count only measured values and update after deletion', as
     await page.getByLabel('Ваши впечатления').fill(name + ' ' + comment);
     await save(page);
     if (comment === 'first') {
-      const ratings = await (await page.request.get('/api/v1/tastings')).json();
+      const ratings = await (await page.request.get('/api/v1/tastings?q=' + encodeURIComponent(name))).json();
       expect(ratings.find((rating: { comment: string }) => rating.comment === name + ' first')).toMatchObject({
         tasted_at: '2020-01-02T05:00:00Z', preparation_uncertain: true, wishes: ['MORE_AROMA'],
         brew_snapshot: { grindClicks: 42, doseG: 14.5, profileId: expect.any(String) },
@@ -487,6 +516,7 @@ test('sensory averages count only measured values and update after deletion', as
   await expect(card.getByText('Сладость: 5 из 5 (1 изм.)')).toBeVisible();
   await page.getByRole('button', { name: /История/ }).click();
   await page.getByRole('button', { name: 'Оценки', exact: true }).click();
+  await page.getByLabel('Поиск по названию или обжарщику').fill(name);
   const first = page.locator('article.history-row').filter({ hasText: name + ' first' });
   await first.getByRole('button', { name: 'Удалить', exact: true }).click();
   await expect(first).toHaveCount(0);
@@ -494,6 +524,9 @@ test('sensory averages count only measured values and update after deletion', as
   await card.getByText('Сводка вкуса', { exact: true }).click();
   await expect(card.getByText('Кислотность: 4 из 5 (1 изм.)')).toBeVisible();
   await expect(card.getByText(/Сладость:/)).toHaveCount(0);
+  await page.getByRole('button', { name: /История/ }).click();
+  await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
+  await page.getByRole('button', { name: /Сейчас/ }).click();
   await test.step('AC-08 form and API validation', () => checkValidation(page, info.project.name));
   await test.step('final impressions and equal weight per rated bag', () => checkLotRating(page));
   await test.step('create and edit lots and bags separately', () => checkLotAndBagEditing(page, info.project.name));
@@ -550,7 +583,8 @@ async function checkValidation(page: Page, project: string) {
   await rejected(path, { version: tasting.version, overallRating: 6 }, 'overallRating', 'PATCH');
   await rejected(path, { version: tasting.version, overallRating: 5, comment: ' '.repeat(5001) }, 'comment', 'PATCH');
   const persisted = await (await page.request.get('/api/v1' + path)).json();
-  expect(persisted).toEqual(tasting);
+  const { name: _name, roaster_name: _roaster, history_date: _date, recent: _recent, rating: _rating, ...original } = tasting;
+  expect(persisted).toEqual(original);
   const unchanged = await (await page.request.get('/api/v1/bags?q=' + encodeURIComponent(name))).json();
   expect(unchanged).toHaveLength(1);
   expect(unchanged[0].tasting_count).toBe(1);
@@ -753,4 +787,27 @@ async function checkLotRating(page: Page) {
   const finished = page.locator('article.history-row').filter({ hasText: name }).filter({ hasText: 'Возьму ещё' });
   await expect(finished).toContainText('Средняя оценка чашек: 2 из 5 · оценок: 3');
   await expect(finished).toContainText('Итоговое впечатление: 5 из 5');
+  await page.getByLabel('Поиск по названию или обжарщику').fill(name);
+  await page.getByRole('combobox', { name: 'Статус пачки' }).selectOption('FINISHED');
+  await expect(page.locator('article.history-row')).toHaveCount(1);
+  await page.getByRole('combobox', { name: /Общая оценка/ }).selectOption('4');
+  await expect(page.locator('article.history-row')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
+  const roaster = 'E2E pagination ' + crypto.randomUUID();
+  for (let index = 20; index >= 0; index--) {
+    await create('/lots', { name: 'Lot ' + String(index).padStart(2, '0'), roasterName: roaster });
+  }
+  await page.getByRole('button', { name: 'Лоты', exact: true }).click();
+  await page.getByLabel('Поиск по названию или обжарщику').fill(roaster);
+  await page.getByRole('combobox', { name: 'Сортировка' }).selectOption('name');
+  const rows = page.locator('article.history-row');
+  await expect(rows).toHaveCount(20);
+  await expect(rows.first()).toContainText('Lot 00');
+  await expect(rows.last()).toContainText('Lot 19');
+  await page.getByRole('button', { name: /Далее/ }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('Lot 20');
+  await expect(page.getByRole('button', { name: /Далее/ })).toBeDisabled();
+  await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
+  await expect(page.getByLabel('Поиск по названию или обжарщику')).toHaveValue('');
 }

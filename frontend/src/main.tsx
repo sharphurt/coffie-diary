@@ -175,6 +175,10 @@ export function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [query, setQuery] = useState(""),
+    [historyStatus, setHistoryStatus] = useState(""),
+    [historyRating, setHistoryRating] = useState(""),
+    [coffee, setCoffee] = useState(""),
+    [historySort, setHistorySort] = useState("recent"),
     [start, setStart] = useState(day()),
     [end, setEnd] = useState(day()),
     [deleted, setDeleted] = useState(false),
@@ -183,17 +187,21 @@ export function App() {
   async function refresh() {
     const id = ++refreshId.current;
     const cupHistory = page === "История" && kind === "consumptions";
-    const validPeriod = !!start && !!end && start <= end;
+    const validPeriod = (!cupHistory && !start && !end) || (!!start && !!end && start <= end);
     const today = day();
-    const period = page === "Сейчас" ? `start=${today}&end=${today}` : `start=${start}&end=${end}`;
+    const period = page === "Сейчас" ? `start=${today}&end=${today}` : start && end ? `start=${start}&end=${end}` : "";
+    const filters = new URLSearchParams({ q: query, sort: historySort });
+    if (kind === "bags" && historyStatus) filters.set("status", historyStatus);
+    if (kind !== "consumptions" && historyRating) filters.set("rating", historyRating);
+    if (cupHistory && coffee) filters.set("coffee", coffee);
     const [b, p, s, rows, equipment] = await Promise.all([
-      api("/bags?limit=100&q=" + encodeURIComponent(query)),
+      api("/bags?limit=100"),
       api("/profile"),
       page === "Сейчас" || (cupHistory && validPeriod && !deleted)
-        ? api(`/consumption-stats?${period}`)
+        ? api(`/consumption-stats?${period}${cupHistory ? "&" + filters : ""}`)
         : null,
-      page === "История" && (!cupHistory || validPeriod)
-        ? api(`/${kind}?deleted=${deleted}&offset=${offset}${cupHistory ? "&" + period : ""}`)
+      page === "История" && validPeriod
+        ? api(`/${kind}?deleted=${deleted}&offset=${offset}&limit=21&${filters}&${period}`)
         : [],
       api("/brew-profiles"),
     ]);
@@ -212,7 +220,7 @@ export function App() {
   }, []);
   useEffect(() => {
     if (user) refresh().catch((e) => setError(e.message));
-  }, [user, page, kind, query, start, end, deleted, offset]);
+  }, [user, page, kind, query, start, end, deleted, offset, historyStatus, historyRating, coffee, historySort]);
   useEffect(() => {
     const f = (e: BeforeUnloadEvent) => {
       if (modal) {
@@ -679,7 +687,34 @@ export function App() {
         )}
         {page === "История" && (
           <>
-            {kind === "consumptions" && <div className="filters">
+            <div className="filters">
+              <label>Поиск по названию или обжарщику
+                <input value={query} onChange={e => { setQuery(e.target.value); setOffset(0); }} />
+              </label>
+              <label>Сортировка
+                <select value={historySort} onChange={e => { setHistorySort(e.target.value); setOffset(0); }}>
+                  <option value="recent">Последнее использование</option>
+                  <option value="name">По названию</option>
+                  {kind !== "consumptions" && <option value="rating">По оценке</option>}
+                </select>
+              </label>
+              {kind === "bags" && <label>Статус пачки
+                <select value={historyStatus} onChange={e => { setHistoryStatus(e.target.value); setOffset(0); }}>
+                  <option value="">Любой</option><option value="ACTIVE">Пью сейчас</option>
+                  <option value="STOCK">В запасе</option><option value="FINISHED">Закончена</option>
+                </select>
+              </label>}
+              {kind === "consumptions" ? <label>Известность лота
+                <select value={coffee} onChange={e => { setCoffee(e.target.value); setOffset(0); }}>
+                  <option value="">Все чашки</option><option value="known">Известный лот</option>
+                  <option value="unknown">Неизвестный лот</option>
+                </select>
+              </label> : <label>Общая оценка{kind === "tastings" ? "" : " (округлённая)"}
+                <select value={historyRating} onChange={e => { setHistoryRating(e.target.value); setOffset(0); }}>
+                  <option value="">Любая</option>
+                  {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>}
               <label>
                 С
                 <input
@@ -697,10 +732,16 @@ export function App() {
                 />
               </label>
               <button onClick={() => { const today = day(); setStart(today); setEnd(today); setOffset(0); }}>Сегодня</button>
-              {(!start || !end || start > end) ? <span>Укажите корректный период</span> : !deleted && <b>
+              <button onClick={() => {
+                setQuery(""); setHistoryStatus(""); setHistoryRating(""); setCoffee("");
+                setHistorySort("recent"); setDeleted(false); setOffset(0);
+                setStart(kind === "consumptions" ? day() : "");
+                setEnd(kind === "consumptions" ? day() : "");
+              }}>Сбросить фильтры</button>
+              {((start || end || kind === "consumptions") && (!start || !end || start > end)) ? <span>Укажите корректный период</span> : kind === "consumptions" && !deleted && <b>
                 {stats.cups} чашек · {stats.volume} мл за период
               </b>}
-            </div>}
+            </div>
             <div className="tabs">
               {[
                 ["consumptions", "Выпито"],
@@ -713,6 +754,9 @@ export function App() {
                   className={kind === k ? "selected" : ""}
                   onClick={() => {
                     setKind(k);
+                    setStart(k === "consumptions" ? day() : "");
+                    setEnd(k === "consumptions" ? day() : "");
+                    setHistorySort("recent");
                     setOffset(0);
                   }}
                 >
@@ -731,7 +775,7 @@ export function App() {
               />
               Показать удалённые
             </label>
-            {history.map((r) => (
+            {history.slice(0, 20).map((r) => (
               <article className="history-row" key={r.id}>
                 <div>
                   <b>
@@ -871,7 +915,7 @@ export function App() {
                 ← Назад
               </button>
               <button
-                disabled={history.length < 20}
+                disabled={history.length <= 20}
                 onClick={() => setOffset(offset + 20)}
               >
                 Далее →

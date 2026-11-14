@@ -112,8 +112,12 @@ public class Api {
       @RequestParam(defaultValue = "false") boolean deleted,
       @RequestParam(defaultValue = "") String q,
       @RequestParam(required = false) LocalDate start,
-      @RequestParam(required = false) LocalDate end) {
-    return service.list(owner(p), kind, limit, offset, deleted, q, start, end);
+      @RequestParam(required = false) LocalDate end,
+      @RequestParam(required = false) String status,
+      @RequestParam(required = false) Integer rating,
+      @RequestParam(required = false) String coffee,
+      @RequestParam(required = false) String sort) {
+    return service.list(owner(p), kind, limit, offset, deleted, q, start, end, status, rating, coffee, sort);
   }
 
   @GetMapping("/{kind:bags|lots|tastings|consumptions}/{id}")
@@ -207,8 +211,9 @@ public class Api {
   }
 
   @GetMapping("/consumption-stats")
-  public Object stats(Principal p, @RequestParam LocalDate start, @RequestParam LocalDate end) {
-    return service.stats(owner(p), start, end);
+  public Object stats(Principal p, @RequestParam LocalDate start, @RequestParam LocalDate end,
+      @RequestParam(defaultValue = "") String q, @RequestParam(required = false) String coffee) {
+    return service.stats(owner(p), start, end, q, coffee);
   }
 
   @GetMapping("/catalog/sources")

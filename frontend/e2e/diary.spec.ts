@@ -103,15 +103,24 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   const cups = await (await page.request.get('/api/v1/consumptions')).json();
   const linked = cups.find((cup: { tasting_id: string }) => cup.tasting_id === tasting.id);
   expect(linked.bag_id).toBe(tasting.bag_id);
+  await row.getByRole('button', { name: 'Изменить', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Пачка чашки' })).toBeDisabled();
+  await save(page);
   const linkCsrf = await (await page.request.get('/api/v1/auth/csrf')).json();
   const linkHeaders = { [linkCsrf.headerName]: linkCsrf.token, 'Idempotency-Key': crypto.randomUUID() };
+  const otherName = 'E2E unrelated ' + crypto.randomUUID();
   const otherBag = await (await page.request.post('/api/v1/bags', {
-    headers: linkHeaders, data: { name: 'E2E unrelated ' + crypto.randomUUID(), status: 'STOCK' },
+    headers: linkHeaders, data: { name: otherName, status: 'STOCK' },
   })).json();
   const otherRating = await (await page.request.post('/api/v1/tastings', {
     headers: { ...linkHeaders, 'Idempotency-Key': crypto.randomUUID() },
     data: { bagId: otherBag.id, overallRating: 4 },
   })).json();
+  const currentLinked = await (await page.request.get(`/api/v1/consumptions/${linked.id}`)).json();
+  const blockedMove = await page.request.patch(`/api/v1/consumptions/${linked.id}`, {
+    headers: linkHeaders, data: { version: currentLinked.version, bagId: otherBag.id },
+  });
+  expect(blockedMove.status()).toBe(409);
   await row.getByRole('button', { name: 'Отвязать оценку' }).click();
   await expect(row.getByRole('button', { name: 'Привязать оценку', exact: true })).toBeVisible();
   const unlinked = await (await page.request.get(`/api/v1/consumptions/${linked.id}`)).json();
@@ -120,6 +129,19 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
     headers: linkHeaders, data: { version: unlinked.version, tastingId: otherRating.id },
   });
   expect(wrongBag.status()).toBe(409);
+  await row.getByRole('button', { name: 'Изменить', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Пачка чашки' }).selectOption(otherBag.id);
+  await page.getByRole('combobox', { name: 'Профиль чашки' }).selectOption('');
+  await save(page);
+  const moved = await (await page.request.get(`/api/v1/consumptions/${linked.id}`)).json();
+  expect(moved).toMatchObject({ bag_id: otherBag.id, tasting_id: null, profile_snapshot: {}, volume_ml: 250,
+    consumed_at: linked.consumed_at });
+  const movedRow = page.locator('article.history-row').filter({ hasText: otherName });
+  await movedRow.getByRole('button', { name: 'Изменить', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Пачка чашки' }).selectOption(tasting.bag_id);
+  const activeProfile = await (await page.request.get('/api/v1/profile')).json();
+  await page.getByRole('combobox', { name: 'Профиль чашки' }).selectOption(activeProfile.id);
+  await save(page);
   expect((await page.request.get(`/api/v1/tastings/${tasting.id}`)).ok()).toBeTruthy();
   expect(await totals(page)).toMatchObject({ cups: initial.cups + 1, volume: initial.volume + 250 });
   await row.getByRole('button', { name: 'Удалить', exact: true }).click();

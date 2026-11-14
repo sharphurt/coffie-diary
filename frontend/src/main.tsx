@@ -336,11 +336,16 @@ export function App() {
           coffeeLabel: v.coffeeLabel || null,
         });
       if (m.type === "editCup") {
+        const editedTime = new Date(`${v.consumedAt}+05:00`).toISOString();
         await api(`/consumptions/${m.event.id}`, "PATCH", {
           version: m.event.version,
-          consumedAt: new Date(`${v.consumedAt}+05:00`).toISOString(),
+          ...(editedTime !== new Date(`${localCupTime(m.event.consumed_at)}+05:00`).toISOString()
+            ? { consumedAt: editedTime } : {}),
           volumeMl: Number(v.volumeMl),
           comment: v.comment,
+          ...(m.newBagId !== undefined ? { bagId: m.newBagId || null } : {}),
+          ...(m.newProfileId !== undefined ? { profileId: m.newProfileId || null } : {}),
+          coffeeLabel: v.coffeeLabel || null,
         });
       }
       if (m.type === "tasting") {
@@ -794,6 +799,7 @@ export function App() {
                         ? `★ ${r.overall_rating}/5 · ${format(r.tasted_at)}`
                         : r.status || "Личный лот"}
                   </p>
+                  {kind === "consumptions" && r.profile_snapshot?.name && <p>{r.profile_snapshot.name}</p>}
                   {r.comment && <p>{r.comment}</p>}
                   {kind === "lots" && <p>{r.rated_bags
                     ? `Рейтинг лота: ${sensoryNumber.format(r.rating)} из 5 · оценённых пачек: ${r.rated_bags}`
@@ -1200,6 +1206,43 @@ export function App() {
               )}
               {modal.type === "editCup" && (
                 <>
+                  <label>Пачка чашки
+                    <select disabled={!!modal.event.tasting_id}
+                      value={modal.newBagId ?? modal.event.bag_id ?? ""}
+                      onChange={e => setModal({ ...modal, newBagId: e.target.value })}>
+                      <option value="">Неизвестный кофе</option>
+                      {modal.event.bag_id && ![...bags, ...(modal.bagResults ?? [])].some(b => b.id === modal.event.bag_id) &&
+                        <option value={modal.event.bag_id}>{modal.event.bag_name ?? "Удалённая пачка"}</option>}
+                      {[...new Map<string, Row>([...bags, ...(modal.bagResults ?? [])]
+                        .map((bag: Row) => [bag.id, bag])).values()].map(bag => (
+                        <option key={bag.id} value={bag.id}>{bag.name} · {bag.status} · {format(bag.created_at)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {modal.event.tasting_id ? <p>Для смены пачки сначала отвяжите оценку.</p> :
+                    <label>Найти пачку по названию или обжарщику
+                      <input onChange={async e => {
+                        const query = e.target.value;
+                        const key = modal.key;
+                        setModal(current => current?.key === key ? { ...current, bagQuery: query } : current);
+                        try {
+                          const results = await api("/bags?limit=100&q=" + encodeURIComponent(query));
+                          setModal(current => current?.key === key && current?.bagQuery === query
+                            ? { ...current, bagResults: results } : current);
+                        } catch (failure) { setError((failure as Error).message); }
+                      }} />
+                    </label>}
+                  {!(modal.newBagId ?? modal.event.bag_id) && <label>Что пили?
+                    <input name="coffeeLabel" maxLength={200} defaultValue={modal.event.coffee_label ?? ""} />
+                  </label>}
+                  <label>Профиль чашки
+                    <select defaultValue="keep" onChange={e =>
+                      setModal({ ...modal, newProfileId: e.target.value === "keep" ? undefined : e.target.value })}>
+                      <option value="keep">Оставить снимок: {modal.event.profile_snapshot?.name ?? "без профиля"}</option>
+                      <option value="">Без профиля</option>
+                      {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
                   <label>
                     Дата и время (Екатеринбург)
                     <input name="consumedAt" type="datetime-local" step="1"

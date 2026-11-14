@@ -250,15 +250,7 @@ public class DiaryService {
   Map<String, Object> consumption(UUID owner, Map<String, Object> in, UUID tasting) {
     UUID id = UUID.randomUUID(), bag = in.get("bagId") == null ? null : uuid(in.get("bagId"));
     if (bag != null) active("coffee_bag", bag, owner);
-    Map<String, Object> p = profile(owner);
-    if (in.containsKey("profileId")) {
-      if (in.get("profileId") == null) p = Map.of();
-      else {
-        p = row("brew_profile", uuid(in.get("profileId")), owner);
-        if (p.get("deleted_at") != null)
-          throw new ResponseStatusException(HttpStatus.CONFLICT, "Профиль архивирован");
-      }
-    }
+    var p = in.containsKey("profileId") ? cupProfile(owner, in.get("profileId")) : profile(owner);
     var volume =
         Rules.number(
             in.getOrDefault("volumeMl", p.getOrDefault("default_cup_volume_ml", 250)),
@@ -283,21 +275,46 @@ public class DiaryService {
     return row("consumption_event", id, owner);
   }
 
+  private Map<String, Object> cupProfile(UUID owner, Object id) {
+    if (id == null) return Map.of();
+    var selected = row("brew_profile", uuid(id), owner);
+    if (selected.get("deleted_at") != null)
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Профиль архивирован");
+    return selected;
+  }
+
   @Transactional
   public Map<String, Object> editConsumption(UUID owner, UUID id, Map<String, Object> in) {
-    db.queryForObject("select id from app_user where id=? for update", UUID.class, owner);
-    var current = row("consumption_event", id, owner);
-    version(current, in);
-    if (current.get("deleted_at") != null)
-      throw new ResponseStatusException(HttpStatus.CONFLICT, "Запись удалена");
-    if (in.get("consumedAt") == null)
+    var current = editable("consumption_event", owner, id, in);
+    UUID previousBag = (UUID) current.get("bag_id");
+    UUID bag = previousBag;
+    if (in.containsKey("bagId")) {
+      bag = in.get("bagId") == null ? null : uuid(in.get("bagId"));
+      if (!Objects.equals(bag, previousBag)) {
+        if (current.get("tasting_id") != null)
+          throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала отвяжите оценку от чашки");
+        if (bag != null) {
+          var target = row("coffee_bag", bag, owner);
+          if (target.get("deleted_at") != null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Пачка удалена");
+          active("personal_lot", uuid(target.get("lot_id")), owner);
+        }
+      }
+    }
+    if (in.containsKey("consumedAt") && in.get("consumedAt") == null)
       throw new Rules.Invalid("consumedAt", "Укажите время чашки");
     db.update(
-        "update consumption_event set consumed_at=?,volume_ml=?,comment=?,updated_at=now(),"
+        "update consumption_event set consumed_at=?,volume_ml=?,comment=?,bag_id=?,coffee_label=?,"
+            + "profile_snapshot=?::jsonb,updated_at=now(),"
             + "version=version+1 where id=? and owner_id=?",
-        Timestamp.from(Rules.time(in.get("consumedAt"))),
-        Rules.number(in.get("volumeMl"), "volumeMl", 10, 2000, true).intValue(),
-        Rules.text(in, "comment", 5000, false), id, owner);
+        Timestamp.from(Rules.time(in.getOrDefault("consumedAt", current.get("consumed_at")))),
+        Rules.number(in.getOrDefault("volumeMl", current.get("volume_ml")), "volumeMl", 10, 2000, true).intValue(),
+        in.containsKey("comment") ? Rules.text(in, "comment", 5000, false) : current.get("comment"),
+        bag,
+        bag != null ? null : in.containsKey("coffeeLabel") ? Rules.text(in, "coffeeLabel", 200, false)
+            : current.get("coffee_label"),
+        json(in.containsKey("profileId") ? cupProfile(owner, in.get("profileId")) : current.get("profile_snapshot")),
+        id, owner);
     return row("consumption_event", id, owner);
   }
 

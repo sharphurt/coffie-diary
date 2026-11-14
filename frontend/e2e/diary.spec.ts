@@ -402,7 +402,7 @@ test('sensory averages count only measured values and update after deletion', as
   await expect(card.getByText('Кислотность: 4 из 5 (1 изм.)')).toBeVisible();
   await expect(card.getByText(/Сладость:/)).toHaveCount(0);
   await test.step('AC-08 form and API validation', () => checkValidation(page, info.project.name));
-  await test.step('create and edit lots and bags separately', () => checkLotAndBagEditing(page));
+  await test.step('create and edit lots and bags separately', () => checkLotAndBagEditing(page, info.project.name));
 });
 
 async function checkValidation(page: Page, project: string) {
@@ -465,7 +465,7 @@ async function checkValidation(page: Page, project: string) {
   );
 }
 
-async function checkLotAndBagEditing(page: Page) {
+async function checkLotAndBagEditing(page: Page, project: string) {
   const original = 'E2E lot ' + crypto.randomUUID();
   const updated = original + ' renamed';
   const get = async (path: string) => (await page.request.get('/api/v1' + path)).json();
@@ -517,4 +517,99 @@ async function checkLotAndBagEditing(page: Page) {
     expect(await response.json()).toMatchObject({ fieldErrors: { [field]: expect.any(String) } });
   }
   expect(await get('/bags/' + bag.id)).toEqual(edited);
+  await checkPhotos(page, updated, bag.id, project);
+}
+
+async function checkPhotos(page: Page, bagName: string, bagId: string, project: string) {
+  const { createHash } = await import('node:crypto');
+  const { writeFile } = await import('node:fs/promises');
+  const app = '/api/v1';
+  const source = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 400;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, 400, 400);
+    ctx.fillStyle = '#0000ff';
+    ctx.fillRect(400, 0, 400, 400);
+    return canvas.toDataURL('image/jpeg').split(',')[1];
+  });
+  const jpeg = Buffer.from(source, 'base64');
+  // TIFF IFD0: orientation 6 and GPS directory. GPS IFD contains GPSVersionID.
+  const exif = Buffer.from('45786966000049492a0008000000020012010300010000000600000025880400010000002600000000000000010000000100040000000203000000000000', 'hex');
+  const segment = Buffer.alloc(4);
+  segment.writeUInt16BE(0xffe1);
+  segment.writeUInt16BE(exif.length + 2, 2);
+  const payload = Buffer.concat([jpeg.subarray(0, 2), segment, exif, jpeg.subarray(2)]);
+  const row = page.locator('article.history-row').filter({ hasText: bagName });
+  await row.getByRole('button', { name: 'Фото', exact: true }).click();
+  const chooser = page.getByLabel('Загрузить фото');
+  await chooser.setInputFiles({ name: 'oriented.jpg', mimeType: 'image/jpeg', buffer: payload });
+  const preview = page.getByRole('img', { name: 'Фото пачки 1' });
+  await expect(preview).toBeVisible();
+  const src = (await preview.getAttribute('src'))!;
+  const id = src.split('/').pop()!.split('?')[0];
+  const full = await page.request.get(app + '/media/' + id);
+  expect(full.ok()).toBeTruthy();
+  const thumb = await page.request.get(src);
+  expect(thumb.ok()).toBeTruthy();
+  const imageBytes = await full.body();
+  const thumbBytes = await thumb.body();
+  function chunks(bytes: Buffer) {
+    const names: string[] = [];
+    for (let pos = 8; pos < bytes.length; pos += 12 + bytes.readUInt32BE(pos)) {
+      names.push(bytes.toString('ascii', pos + 4, pos + 8));
+    }
+    return [...new Set(names)].sort();
+  }
+  expect(chunks(imageBytes)).toEqual(['IDAT', 'IEND', 'IHDR']);
+  expect(chunks(thumbBytes)).toEqual(['IDAT', 'IEND', 'IHDR']);
+  expect([imageBytes.readUInt32BE(16), imageBytes.readUInt32BE(20)]).toEqual([400, 800]);
+  expect([thumbBytes.readUInt32BE(16), thumbBytes.readUInt32BE(20)]).toEqual([240, 480]);
+  const colors = await page.evaluate(async url => {
+    const image = await createImageBitmap(await (await fetch(url)).blob());
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0);
+    return [100, 700].map(y => Array.from(ctx.getImageData(200, y, 1, 1).data));
+  }, app + '/media/' + id);
+  expect(colors[0][0]).toBeGreaterThan(240);
+  expect(colors[1][2]).toBeGreaterThan(240);
+
+  const webp = await page.evaluate(() => document.createElement('canvas').toDataURL('image/webp').split(',')[1]);
+  await chooser.setInputFiles({ name: 'second.webp', mimeType: 'image/webp', buffer: Buffer.from(webp, 'base64') });
+  await expect(page.getByRole('img', { name: 'Фото пачки 2' })).toBeVisible();
+  await page.getByRole('button', { name: 'На обложку' }).click();
+  const secondSrc = (await page.getByRole('img', { name: 'Фото пачки 1' }).getAttribute('src'))!;
+  const secondId = secondSrc.split('/').pop()!.split('?')[0];
+  expect(secondId).not.toBe(id);
+  await page.getByRole('button', { name: 'На обложку' }).click();
+  await chooser.setInputFiles({ name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('<svg/>') });
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('JPEG, PNG или WebP');
+  await page.getByRole('button', { name: 'Сохранить фото' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const bags = await (await page.request.get(app + '/bags?q=' + encodeURIComponent(bagName))).json();
+  expect(bags[0].photos.ids).toEqual([id, secondId]);
+
+  if (project === 'desktop' && process.env.E2E_MEDIA_STATE && process.env.E2E_FRESH_DATABASE === 'true') {
+    const { Client } = await import('pg');
+    const db = new Client({ host: '127.0.0.1', port: 55439, database: 'postgres',
+      user: process.env.POSTGRES_USER, password: process.env.POSTGRES_PASSWORD });
+    const otherId = crypto.randomUUID();
+    const ownBag = crypto.randomUUID();
+    const lot = crypto.randomUUID();
+    await db.connect();
+    try {
+      await db.query("insert into app_user(id,login,password_hash) select $1,'photo-test-owner',password_hash from app_user where login='owner'", [otherId]);
+      await db.query("insert into personal_lot(id,owner_id,name) values($1,$2,'Other coffee')", [lot, otherId]);
+      await db.query("insert into coffee_bag(id,owner_id,lot_id,mass_g,status) values($1,$2,$3,250,'STOCK')", [ownBag, otherId, lot]);
+    } finally { await db.end(); }
+    const hash = (data: Buffer) => createHash('sha256').update(data).digest('hex');
+    await writeFile(process.env.E2E_MEDIA_STATE, JSON.stringify({
+      bagName, bagId, ownBag, ids: [id, secondId], full: hash(imageBytes), thumb: hash(thumbBytes),
+    }));
+  }
 }

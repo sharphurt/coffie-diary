@@ -492,8 +492,11 @@ public class DiaryService {
               + " and s.value->>'status'='RATED' and s.value->>'value' is not null"
               + " group by s.key) measured) sensory_summary,(select count(*) from"
               + " consumption_event c where c.bag_id=b.id and c.deleted_at is null)"
-              + " cup_count,(select id from media_asset m where m.bag_id=b.id order by created_at"
-              + " limit 1) photo_id from coffee_bag b join personal_lot l on l.id=b.lot_id where"
+              + " cup_count,(select id from media_asset m where m.bag_id=b.id and m.owner_id=b.owner_id"
+              + " order by position,id limit 1) photo_id,"
+              + " (select jsonb_build_object('ids',coalesce(jsonb_agg(m.id order by position,id),'[]'::jsonb))"
+              + " from media_asset m where m.bag_id=b.id and m.owner_id=b.owner_id) photos"
+              + " from coffee_bag b join personal_lot l on l.id=b.lot_id where"
               + " b.owner_id=? and b.deleted_at"
               + condition
               + " and l.deleted_at is null and (l.name ilike ? or coalesce(l.roaster_name,'') ilike"

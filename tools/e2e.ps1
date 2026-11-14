@@ -18,6 +18,8 @@ $env:SERVER_ADDRESS = '127.0.0.1'
 $env:COOKIE_SECURE = 'false'
 $env:E2E_BASE_URL = 'http://127.0.0.1:18089'
 $env:E2E_FRESH_DATABASE = 'true'
+$env:MEDIA_PATH = Join-Path $run 'media'
+$env:E2E_MEDIA_STATE = Join-Path $run 'media-state.json'
 $env:SPRING_WEB_RESOURCES_STATIC_LOCATIONS = 'file:' + ($root.Replace('\','/') + '/frontend/dist/')
 $javaProcess = $null
 $pgStarted = $false
@@ -39,18 +41,30 @@ try {
   $pgControl.WaitForExit()
   if ($pgControl.ExitCode) { throw 'PostgreSQL start failed' }
   $pgStarted = $true
-  $javaProcess = Start-Process -FilePath "$env:JAVA_HOME/bin/java.exe" -ArgumentList '-jar', 'backend/target/coffee-diary-0.1.0.jar' -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput "$run/app.log" -RedirectStandardError "$run/app-error.log"
+  function Start-TestApp([string]$logName) {
+  $process = Start-Process -FilePath "$env:JAVA_HOME/bin/java.exe" -ArgumentList '-jar', 'backend/target/coffee-diary-0.1.0.jar' -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput "$run/$logName.log" -RedirectStandardError "$run/$logName-error.log"
   $ready = $false
   for ($i = 0; $i -lt 90; $i++) {
-    if ($javaProcess.HasExited) { throw "Application exited; see $run/app.log" }
+    if ($process.HasExited) { throw "Application exited; see $run/$logName.log" }
     try {
       $response = Invoke-WebRequest "$env:E2E_BASE_URL/api/v1/auth/csrf" -TimeoutSec 2
       if ($response.StatusCode -eq 200) { $ready = $true; break }
     } catch { Start-Sleep -Milliseconds 500 }
   }
-  if (!$ready) { throw "Application did not start; see $run/app.log" }
+  if (!$ready) {
+    Stop-Process -Id $process.Id
+    throw "Application did not start; see $run/$logName.log"
+  }
+  return $process
+  }
+  $javaProcess = Start-TestApp 'app'
   & npm.cmd --prefix frontend run test:e2e
   if ($LASTEXITCODE) { throw "E2E tests failed; logs: $run" }
+  Stop-Process -Id $javaProcess.Id
+  $javaProcess.WaitForExit()
+  $javaProcess = Start-TestApp 'restart'
+  & node ./tools/check-media-restart.mjs
+  if ($LASTEXITCODE) { throw "Media restart check failed; logs: $run" }
 } finally {
   if ($javaProcess -and !$javaProcess.HasExited) { Stop-Process -Id $javaProcess.Id; $javaProcess.WaitForExit() }
   if ($pgStarted) { & "$PgBin/pg_ctl.exe" -D "$run/db" -m fast -w stop | Out-Null }

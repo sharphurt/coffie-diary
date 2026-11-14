@@ -12,11 +12,11 @@ export async function api(
   const headers: Record<string, string> = {};
   if (method !== "GET" && csrf) headers[csrf.headerName] = csrf.token;
   if (key) headers["Idempotency-Key"] = key;
-  if (data) headers["Content-Type"] = "application/json";
+  if (data && !(data instanceof FormData)) headers["Content-Type"] = "application/json";
   const r = await fetch("/api/v1" + path, {
     method,
     headers,
-    body: data ? JSON.stringify(data) : undefined,
+    body: data instanceof FormData ? data : data ? JSON.stringify(data) : undefined,
   });
   if (!r.ok) {
     let e;

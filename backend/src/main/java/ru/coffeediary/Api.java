@@ -13,13 +13,48 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/v1")
 public class Api {
   final DiaryService service;
+  final MediaService media;
 
-  public Api(DiaryService service) {
+  public Api(DiaryService service, MediaService media) {
     this.service = service;
+    this.media = media;
   }
 
   UUID owner(Principal p) {
     return service.owner(p.getName());
+  }
+
+  @PostMapping(value = "/media", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  @ResponseStatus(HttpStatus.CREATED)
+  public Object uploadMedia(Principal p, @RequestParam org.springframework.web.multipart.MultipartFile file)
+      throws java.io.IOException {
+    return media.upload(owner(p), file.getBytes());
+  }
+
+  @GetMapping("/media/{id}")
+  public ResponseEntity<org.springframework.core.io.FileSystemResource> readMedia(
+      Principal p, @PathVariable UUID id, @RequestParam(defaultValue = "false") boolean thumbnail) {
+    return ResponseEntity.ok().contentType(MediaType.IMAGE_PNG)
+        .cacheControl(CacheControl.noStore()).body(media.read(owner(p), id, thumbnail));
+  }
+
+  @DeleteMapping("/media/{id}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void deleteMedia(Principal p, @PathVariable UUID id) {
+    media.delete(owner(p), id);
+  }
+
+  record Photos(List<UUID> mediaIds) {}
+
+  @PutMapping("/bags/{id}/photos")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void attachPhotos(Principal p, @PathVariable UUID id, @RequestBody Photos photos) {
+    media.attach(owner(p), id, photos.mediaIds());
+  }
+
+  @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+  public ResponseEntity<?> uploadTooLarge() {
+    return error(413, "FILE_TOO_LARGE", "Размер фото не должен превышать 10 МиБ", Map.of());
   }
 
   @GetMapping("/auth/csrf")

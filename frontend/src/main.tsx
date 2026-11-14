@@ -58,6 +58,57 @@ function RecipeFields({ recipe }: { recipe?: Row }) {
   );
 }
 
+function BagPhotos({ bag, committed }: { bag: Row; committed: () => Promise<void> }) {
+  const [ids, setIds] = useState<string[]>(bag.photos?.ids ?? []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function update(action: () => Promise<void>) {
+    setBusy(true);
+    setError("");
+    try { await action(); }
+    catch (failure) { setError((failure as Error).message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <section aria-label="Фото пачки">
+      {ids.map((id, index) => (
+        <div key={id} className="photo-item">
+          <a href={`/api/v1/media/${id}`} target="_blank" rel="noreferrer">
+            <img src={`/api/v1/media/${id}?thumbnail=true`} alt={`Фото пачки ${index + 1}`} />
+          </a>
+          {index === 0 ? <span>Обложка</span> : <button disabled={busy}
+            onClick={() => setIds([id, ...ids.filter(value => value !== id)])}>На обложку</button>}
+          {index > 0 && <button disabled={busy} onClick={() => {
+            const next = [...ids];
+            [next[index - 1], next[index]] = [next[index], next[index - 1]];
+            setIds(next);
+          }}>Выше</button>}
+          <button disabled={busy} onClick={() => setIds(ids.filter(value => value !== id))}>Убрать фото</button>
+        </div>
+      ))}
+      <label>Загрузить фото
+        <input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || ids.length >= 5}
+          onChange={e => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) return;
+            void update(async () => {
+              const data = new FormData();
+              data.set("file", file);
+              const photo = await api("/media", "POST", data);
+              setIds([...ids, photo.id]);
+            });
+          }} />
+      </label>
+      {error && <p role="alert">{error}</p>}
+      <button className="primary" disabled={busy} onClick={() => update(async () => {
+        await api(`/bags/${bag.id}/photos`, "PUT", { mediaIds: ids });
+        await committed();
+      })}>Сохранить фото</button>
+    </section>
+  );
+}
+
 function SensorySummary({ summary }: { summary?: Record<string, { average: number; count: number }> }) {
   if (!summary || !Object.keys(summary).length) return null;
   return (
@@ -465,12 +516,13 @@ export function App() {
                 .map((b) => (
                   <article key={b.id} className="card">
                     <div className="bag-art">
+                      {b.photo_id ? <img loading="lazy" src={`/api/v1/media/${b.photo_id}?thumbnail=true`} alt={b.name} /> :
                       <span>
                         COFFEE
                         <br />
                         <b>{b.roaster_name || "ВАШ ЛОТ"}</b>
                         <em>{b.mass_g} г</em>
-                      </span>
+                      </span>}
                     </div>
                     <div className="card-body">
                       <p className="eyebrow">
@@ -494,6 +546,7 @@ export function App() {
                       </button>
                       <SensorySummary summary={b.sensory_summary} />
                       <div className="card-actions">
+                        <button onClick={() => open("photos", { record: b })}>Фото</button>
                         <button
                           onClick={() =>
                             open("tasting", { bagId: b.id, name: b.name })
@@ -672,6 +725,7 @@ export function App() {
                     )}
                   {kind === "bags" && !deleted && (
                     <>
+                      <button onClick={() => open("photos", { record: r })}>Фото</button>
                       <button disabled={busy} onClick={() => open("bag", { record: r, lotId: r.lot_id, name: r.name })}>Изменить пачку</button>
                       <button
                         onClick={() =>
@@ -830,7 +884,8 @@ export function App() {
             </button>
             <p className="eyebrow">МОЙ КОФЕ</p>
             <h2 id="dialog-title">
-              {modal.type === "lot" ? (modal.record ? "Изменить лот" : "Новый лот")
+              {modal.type === "photos" ? "Фото пачки"
+                : modal.type === "lot" ? (modal.record ? "Изменить лот" : "Новый лот")
                 : modal.type === "bag"
                 ? (modal.record ? "Изменить пачку" : "Новая пачка")
                 : modal.type === "cup"
@@ -839,7 +894,10 @@ export function App() {
                     : modal.tasting ? "Изменить оценку" : "Как вам кофе?"}
             </h2>
             {modal.name && <p>{modal.name}</p>}
-            <form onSubmit={save}>
+            {modal.type === "photos" ? <BagPhotos bag={modal.record} committed={async () => {
+              await refresh();
+              setModal(null);
+            }} /> : <form onSubmit={save}>
               {(modal.type === "lot" || (modal.type === "bag" && !modal.lotId)) && (
                     <>
                       <label>
@@ -1041,7 +1099,7 @@ export function App() {
               <button className="primary wide" disabled={busy}>
                 {busy ? "Сохраняем…" : "Сохранить"}
               </button>
-            </form>
+            </form>}
           </section>
         </div>
       )}

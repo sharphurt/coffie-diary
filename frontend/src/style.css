@@ -673,3 +673,22 @@ textarea {
     font-size: 13px;
   }
 }
+
+.bag-art > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.photo-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.photo-item img {
+  display: block;
+  width: 72px;
+  height: 60px;
+  object-fit: cover;
+}

@@ -95,6 +95,70 @@ paths:
         - {in: query, name: end, required: true, schema: {type: string, format: date}}
       responses:
         '200': {description: cups, volume, timezone и days включая нулевые дни}
+  /media:
+    post:
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+      responses:
+        '201':
+          description: Загруженное фото ожидает привязки
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, previewUrl]
+                properties:
+                  id: {type: string, format: uuid}
+                  previewUrl: {type: string}
+        '413': {description: Превышен лимит 10 МиБ}
+        '422': {description: Неподдерживаемое или повреждённое изображение}
+  /media/{id}:
+    parameters:
+      - {in: path, name: id, required: true, schema: {type: string, format: uuid}}
+    get:
+      parameters:
+        - {in: query, name: thumbnail, schema: {type: boolean, default: false}}
+      responses:
+        '200':
+          description: Нормализованное изображение без исходных метаданных
+          content:
+            image/png:
+              schema: {type: string, format: binary}
+        '404': {description: Фото недоступно владельцу}
+    delete:
+      responses:
+        '204': {description: Фото удалено}
+        '404': {description: Фото недоступно владельцу}
+  /bags/{id}/photos:
+    put:
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mediaIds]
+              properties:
+                mediaIds:
+                  description: Фото в порядке показа. Первый ID задаёт обложку.
+                  type: array
+                  maxItems: 5
+                  uniqueItems: true
+                  items: {type: string, format: uuid}
+      responses:
+        '204': {description: Список фото сохранён}
+        '404': {description: Пачка или фото недоступны владельцу}
+        '409': {description: Фото привязано к другой пачке}
+        '422': {description: Некорректный список фото}
 components:
   securitySchemes:
     session:

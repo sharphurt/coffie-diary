@@ -153,14 +153,35 @@ test('cancel, stock opening, standalone rating and settings', async ({ page }, i
   await save(page);
   expect((await totals(page)).cups).toBe(initial.cups);
   await expect(card).toContainText('★ 4.0');
+  const originalProfile = await (await page.request.get('/api/v1/profile')).json();
+  const bags = await (await page.request.get('/api/v1/bags?q=' + encodeURIComponent(name))).json();
+  const bagTastings = async () => (await (await page.request.get('/api/v1/tastings')).json())
+    .filter((tasting: { bag_id: string }) => tasting.bag_id === bags[0].id);
+  const [originalTasting] = await bagTastings();
+  expect(originalTasting.brew_snapshot).toEqual({ ...originalProfile.recipe, profileName: originalProfile.name });
   await page.getByRole('button', { name: /Настройки/ }).click();
+  await page.getByLabel('Название профиля').fill('Изменённый профиль E2E');
+  await page.getByLabel('Доза кофе, г').fill('15.5');
+  await page.getByRole('combobox', { name: 'Молоко и сахар', exact: true }).selectOption('MILK');
   await page.getByLabel('Объём выпитой чашки, мл').fill('200');
   await page.getByRole('button', { name: 'Сохранить настройки' }).click();
   await expect(page.getByRole('status')).toContainText('Сохранено');
   await expect.poll(async () => (await (await page.request.get('/api/v1/profile')).json()).default_cup_volume_ml).toBe(200);
   await page.getByRole('button', { name: /Сейчас/ }).click();
   await expect(card.getByRole('button', { name: 'Выпил чашку · 200 мл' })).toBeVisible();
+  await card.getByRole('button', { name: 'Оценить', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('5');
+  await save(page);
+  const tastings = await bagTastings();
+  expect(tastings.find((t: { id: string }) => t.id === originalTasting.id).brew_snapshot)
+    .toEqual(originalTasting.brew_snapshot);
+  expect(tastings.find((t: { id: string }) => t.id !== originalTasting.id).brew_snapshot)
+    .toMatchObject({ profileName: 'Изменённый профиль E2E', doseG: 15.5, milkSugar: 'MILK' });
   await page.getByRole('button', { name: /Настройки/ }).click();
+  await expect(page.getByLabel('Доза кофе, г')).toHaveValue('15.5');
+  await page.getByLabel('Название профиля').fill(originalProfile.name);
+  await page.getByLabel('Доза кофе, г').fill(originalProfile.recipe.doseG?.toString() ?? '');
+  await page.getByRole('combobox', { name: 'Молоко и сахар', exact: true }).selectOption(originalProfile.recipe.milkSugar ?? '');
   await page.getByLabel('Объём выпитой чашки, мл').fill('250');
   await page.getByRole('button', { name: 'Сохранить настройки' }).click();
   await expect.poll(async () => (await (await page.request.get('/api/v1/profile')).json()).default_cup_volume_ml).toBe(250);

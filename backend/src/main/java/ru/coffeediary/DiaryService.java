@@ -241,7 +241,10 @@ public class DiaryService {
     active("coffee_bag", bag, owner);
     UUID id = UUID.randomUUID();
     var rating = Rules.number(in.get("overallRating"), "overallRating", 1, 5, true);
-    var snapshot = in.getOrDefault("brewSnapshot", profile(owner).get("recipe"));
+    var profile = profile(owner);
+    var defaultSnapshot = new LinkedHashMap<>(map(json(profile.get("recipe"))));
+    defaultSnapshot.put("profileName", profile.get("name"));
+    var snapshot = in.getOrDefault("brewSnapshot", defaultSnapshot);
     db.update(
         "insert into"
             + " tasting(id,owner_id,bag_id,tasted_at,overall_rating,sensory,repurchase,comment,brew_snapshot,preparation_uncertain)"
@@ -327,15 +330,46 @@ public class DiaryService {
             .intValue();
     int count =
         db.update(
-            "update brew_profile set name=?,default_cup_volume_ml=?,version=version+1 where id=?"
+            "update brew_profile set name=?,default_cup_volume_ml=?,recipe=?::jsonb,version=version+1 where id=?"
                 + " and owner_id=? and version=?",
             Rules.text(input, "name", 200, true),
             volume,
+            json(input.containsKey("recipe") ? validateRecipe(input.get("recipe")) : old.get("recipe")),
             old.get("id"),
             owner,
             old.get("version"));
     if (count != 1) throw new ResponseStatusException(HttpStatus.CONFLICT);
     return profile(owner);
+  }
+
+  private Map<String, Object> validateRecipe(Object value) {
+    if (!(value instanceof Map<?, ?> fields))
+      throw new Rules.Invalid("recipe", "Укажите параметры рецепта");
+    var recipe = new LinkedHashMap<String, Object>();
+    fields.forEach((key, field) -> recipe.put(key.toString(), field));
+    var result = new LinkedHashMap<String, Object>();
+    result.put("method", choice(recipe.get("method"), "method",
+        List.of("AUTO_POUR_OVER", "POUR_OVER", "DRIP", "IMMERSION", "ESPRESSO", "OTHER")));
+    result.put("milkSugar", choice(recipe.get("milkSugar"), "milkSugar",
+        List.of("NONE", "MILK", "SUGAR", "BOTH", "UNKNOWN")));
+    for (String key : List.of("grind", "water", "filterNote"))
+      result.put(key, Rules.text(recipe, key, key.equals("filterNote") ? 500 : 200, false));
+    if (recipe.get("grindClicks") != null)
+      result.put("grindClicks", Rules.number(recipe.get("grindClicks"), "grindClicks", 0, Integer.MAX_VALUE, true));
+    if (result.containsKey("grindClicks") && result.get("grind") instanceof String grind && !grind.isBlank())
+      throw new Rules.Invalid("grind", "Укажите щелчки или текстовую настройку помола");
+    if (recipe.get("doseG") != null) {
+      var dose = Rules.number(recipe.get("doseG"), "doseG", 0, 200, false);
+      if (dose.compareTo(new java.math.BigDecimal("0.1")) < 0)
+        throw new Rules.Invalid("doseG", "Допустимый диапазон: 0.1–200");
+      result.put("doseG", dose);
+    }
+    var limits = Map.of("waterG", 5000, "temperatureC", 100, "durationSeconds", 3600);
+    limits.forEach((key, max) -> {
+      if (recipe.get(key) != null)
+        result.put(key, Rules.number(recipe.get(key), key, 1, max, key.equals("durationSeconds")));
+    });
+    return result;
   }
 
   String table(String kind) {

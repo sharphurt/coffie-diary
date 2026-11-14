@@ -16,6 +16,47 @@ const day = () =>
     new Date(),
   );
 const sensoryNumber = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+const brewMethods = { AUTO_POUR_OVER: "Автоматический пуровер", POUR_OVER: "Пуровер", DRIP: "Капельный", IMMERSION: "Иммерсия", ESPRESSO: "Эспрессо", OTHER: "Другой" };
+const additions = { NONE: "Без добавок", MILK: "Молоко", SUGAR: "Сахар", BOTH: "Молоко и сахар", UNKNOWN: "Неизвестно" };
+const recipeNumbers = [
+  { name: "grindClicks", label: "Общее число щелчков от нуля, включая полные обороты", min: 0, max: 2147483647, step: 1 },
+  { name: "doseG", label: "Доза кофе, г", min: 0.1, max: 200, step: "any" },
+  { name: "waterG", label: "Вода для заваривания, г", min: 1, max: 5000, step: "any" },
+  { name: "temperatureC", label: "Температура, °C", min: 1, max: 100, step: "any" },
+  { name: "durationSeconds", label: "Время приготовления, с", min: 1, max: 3600, step: 1 },
+];
+const recipeTexts = [
+  { name: "grind", label: "Помол (текст, вместо щелчков)", maxLength: 200 },
+  { name: "water", label: "Описание воды", maxLength: 200 },
+  { name: "filterNote", label: "Фильтр или заметка о рецепте", maxLength: 500 },
+];
+
+function RecipeFields({ recipe }: { recipe?: Row }) {
+  return (
+    <>
+      <h3>Обычный рецепт</h3>
+      {([{ name: "method", label: "Метод заваривания", options: brewMethods },
+        { name: "milkSugar", label: "Молоко и сахар", options: additions }]).map(({name, label, options}) => (
+        <label key={name}>{label}
+          <select name={name} defaultValue={recipe?.[name] ?? ""}>
+            <option value="">Не указано</option>
+            {Object.entries(options).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+          </select>
+        </label>
+      ))}
+      {recipeNumbers.map(({ label, ...field }) => (
+        <label key={field.name}>{label}
+          <input {...field} type="number" defaultValue={recipe?.[field.name] ?? ""} />
+        </label>
+      ))}
+      {recipeTexts.map(({ label, ...field }) => (
+        <label key={field.name}>{label}
+          <input {...field} defaultValue={recipe?.[field.name] ?? ""} />
+        </label>
+      ))}
+    </>
+  );
+}
 
 function SensorySummary({ summary }: { summary?: Record<string, { average: number; count: number }> }) {
   if (!summary || !Object.keys(summary).length) return null;
@@ -697,11 +738,20 @@ export function App() {
               onSubmit={(e) => {
                 e.preventDefault();
                 const f = new FormData(e.currentTarget);
+                const recipe = Object.fromEntries([
+                  ...["method", "milkSugar", ...recipeTexts.map(field => field.name)]
+                    .map(name => [name, f.get(name) || null]),
+                  ...recipeNumbers.map(({ name }) => {
+                    const value = f.get(name);
+                    return [name, value === "" ? null : Number(value)];
+                  }),
+                ]);
                 run(() =>
                   api("/profile", "PATCH", {
                     name: f.get("name"),
                     defaultCupVolumeMl: Number(f.get("volume")),
                     version: profile.version,
+                    recipe,
                   }),
                 );
               }}
@@ -730,18 +780,13 @@ export function App() {
                 Это объём напитка, который вы выпиваете, а не воды для
                 заваривания. Старые записи сохранят свой объём.
               </p>
+              <RecipeFields recipe={profile.recipe} />
               <button className="primary" disabled={busy}>
                 Сохранить настройки
               </button>
             </form>
             <h3>Часовой пояс</h3>
             <p>Asia/Yekaterinburg · UTC+5</p>
-            <h3>Ваш способ приготовления</h3>
-            <p>
-              Автоматический пуровер · бумажный фильтр
-              <br />
-              MHW-3BOMBER Race M1 · Kitfort КТ-7570
-            </p>
           </section>
         )}
       </main>

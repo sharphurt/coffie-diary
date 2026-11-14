@@ -31,6 +31,7 @@ for (const [suffix, expected] of [['', state.full], ['?thumbnail=true', state.th
 }
 console.log('PASS: cover order, full image and thumbnail survived application restart');
 
+const ownerProfile = await (await request('/profile')).json();
 cookies.clear();
 const otherCsrf = await (await request('/auth/csrf')).json();
 await request('/auth/login', {
@@ -56,3 +57,36 @@ for (const [method, path, body] of [
   assert.equal(denied.status, 404, method + ' ' + path);
 }
 console.log('PASS: a second owner cannot read, delete or attach another owner’s photos');
+
+const profiles = await (await request('/brew-profiles')).json();
+assert.deepEqual(profiles, []);
+const ownProfile = await (await request('/brew-profiles', {
+  method: 'POST',
+  headers: { ...headers, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'Isolation profile', defaultCupVolumeMl: 180 }),
+})).json();
+assert.notEqual(ownProfile.owner_id, ownerProfile.owner_id);
+assert.deepEqual((await (await request('/brew-profiles')).json()).map(p => p.id), [ownProfile.id]);
+for (const [method, path, body] of [
+  ['PATCH', '/brew-profiles/' + ownerProfile.id, { name: 'Other name', version: ownerProfile.version, defaultCupVolumeMl: 180 }],
+  ['DELETE', '/brew-profiles/' + ownerProfile.id + '?version=' + ownerProfile.version],
+  ['PUT', '/profile/default-brew-profile', { profileId: ownerProfile.id }],
+  ['POST', '/consumptions', { clientEventId: crypto.randomUUID(), profileId: ownerProfile.id, volumeMl: 180 }],
+]) {
+  const denied = await fetch(base + path, {
+    method,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: body && JSON.stringify(body),
+  });
+  assert.equal(denied.status, 404, method + ' ' + path);
+}
+cookies.clear();
+const finalCsrf = await (await request('/auth/csrf')).json();
+await request('/auth/login', {
+  method: 'POST',
+  headers: { [finalCsrf.headerName]: finalCsrf.token },
+  body: new URLSearchParams({ username: 'owner', password: process.env.OWNER_PASSWORD }),
+});
+assert.deepEqual(await (await request('/profile')).json(), ownerProfile);
+assert.ok(!(await (await request('/brew-profiles')).json()).some(profile => profile.id === ownProfile.id));
+console.log('PASS: profile lists and mutations are isolated between owners');

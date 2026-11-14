@@ -402,6 +402,7 @@ test('sensory averages count only measured values and update after deletion', as
   await expect(card.getByText('Кислотность: 4 из 5 (1 изм.)')).toBeVisible();
   await expect(card.getByText(/Сладость:/)).toHaveCount(0);
   await test.step('AC-08 form and API validation', () => checkValidation(page, info.project.name));
+  await test.step('create and edit lots and bags separately', () => checkLotAndBagEditing(page));
 });
 
 async function checkValidation(page: Page, project: string) {
@@ -462,4 +463,58 @@ async function checkValidation(page: Page, project: string) {
   expect(await (await page.request.get('/api/v1/lots')).json()).not.toEqual(
     expect.arrayContaining([expect.objectContaining({ name: 'Rejected ' + name })]),
   );
+}
+
+async function checkLotAndBagEditing(page: Page) {
+  const original = 'E2E lot ' + crypto.randomUUID();
+  const updated = original + ' renamed';
+  const get = async (path: string) => (await page.request.get('/api/v1' + path)).json();
+  await page.getByRole('button', { name: /История/ }).click();
+  await page.getByRole('button', { name: 'Лоты', exact: true }).click();
+  await page.getByRole('button', { name: 'Создать лот' }).click();
+  await page.getByLabel('Название кофе').fill(original);
+  await save(page);
+  const lot = (await get('/lots')).find((row: { name: string }) => row.name === original);
+  expect(lot).toBeDefined();
+  expect(await get('/bags?q=' + encodeURIComponent(original))).toEqual([]);
+  const lotRow = page.locator('article.history-row').filter({ hasText: original });
+  await lotRow.getByRole('button', { name: 'Изменить лот' }).click();
+  await expect(page.getByLabel('Название кофе')).toHaveValue(original);
+  await page.getByLabel('Название кофе').fill(updated);
+  await page.getByLabel(/Обжарщик/).fill('Тестовый обжарщик');
+  await save(page);
+  expect(await get('/lots/' + lot.id)).toMatchObject({ name: updated, roaster_name: 'Тестовый обжарщик' });
+  await lotRow.getByRole('button', { name: 'Добавить пачку' }).click();
+  await save(page);
+  const [bag] = await get('/bags?q=' + encodeURIComponent(updated));
+  expect(bag.lot_id).toBe(lot.id);
+  await page.getByRole('button', { name: 'Пачки', exact: true }).click();
+  await lotRow.getByRole('button', { name: 'Изменить пачку' }).click();
+  await page.getByLabel('Масса, г').fill('275.5');
+  await page.getByLabel('Дата покупки').fill('2020-02-01');
+  await page.getByLabel('Дата обжарки').fill('2020-02-02');
+  await expect(page.getByRole('dialog').getByRole('status')).toContainText('Дата обжарки позже');
+  await page.getByLabel(/Цена покупки/).fill('642.75');
+  await page.getByLabel('Заметка', { exact: true }).fill('Исправленная заметка');
+  await save(page);
+  const edited = await get('/bags/' + bag.id);
+  expect(edited).toMatchObject({ lot_id: lot.id, status: bag.status, opened_at: bag.opened_at,
+    purchased_on: '2020-02-01', roasted_on: '2020-02-02', note: 'Исправленная заметка' });
+  expect(Number(edited.mass_g)).toBe(275.5);
+  expect(Number(edited.purchase_price)).toBe(642.75);
+
+  const csrf = await get('/auth/csrf');
+  const headers = { [csrf.headerName]: csrf.token };
+  const stale = await page.request.patch('/api/v1/bags/' + bag.id, {
+    headers, data: { version: bag.version, massG: 333 },
+  });
+  expect(stale.status()).toBe(409);
+  for (const [field, value] of [['purchasePrice', -1], ['roastedOn', '2099-02-01']]) {
+    const response = await page.request.patch('/api/v1/bags/' + bag.id, {
+      headers, data: { version: edited.version, [field]: value },
+    });
+    expect(response.status()).toBe(422);
+    expect(await response.json()).toMatchObject({ fieldErrors: { [field]: expect.any(String) } });
+  }
+  expect(await get('/bags/' + bag.id)).toEqual(edited);
 }

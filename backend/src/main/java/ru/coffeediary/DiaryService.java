@@ -56,7 +56,8 @@ public class DiaryService {
                 k,
                 v != null && v.getClass().getSimpleName().equals("PGobject")
                     ? map(v)
-                    : v instanceof Timestamp t ? t.toInstant().toString() : v));
+                    : v instanceof Timestamp t ? t.toInstant().toString()
+                    : v instanceof java.sql.Date date ? date.toLocalDate().toString() : v));
     return out;
   }
 
@@ -126,6 +127,7 @@ public class DiaryService {
     }
     Map<String, Object> result =
         switch (kind) {
+          case "lots" -> lot(owner, input);
           case "bags" -> bag(owner, input);
           case "consumptions" -> consumption(owner, input, null);
           case "tastings" -> tasting(owner, input);
@@ -135,16 +137,74 @@ public class DiaryService {
     return result;
   }
 
+  Map<String, Object> lot(UUID owner, Map<String, Object> in) {
+    UUID id = UUID.randomUUID();
+    db.update("insert into personal_lot(id,owner_id,name,roaster_name) values(?,?,?,?)",
+        id, owner, Rules.text(in, "name", 200, true), Rules.text(in, "roasterName", 120, false));
+    return row("personal_lot", id, owner);
+  }
+
+  @Transactional
+  public Map<String, Object> editLot(UUID owner, UUID id, Map<String, Object> in) {
+    var old = editable("personal_lot", owner, id, in);
+    db.update("update personal_lot set name=?,roaster_name=?,updated_at=now(),version=version+1"
+            + " where id=? and owner_id=?",
+        Rules.text(in, "name", 200, true),
+        in.containsKey("roasterName") ? Rules.text(in, "roasterName", 120, false) : old.get("roaster_name"),
+        id, owner);
+    return row("personal_lot", id, owner);
+  }
+
+  @Transactional
+  public Map<String, Object> editBag(UUID owner, UUID id, Map<String, Object> in) {
+    var old = editable("coffee_bag", owner, id, in);
+    active("personal_lot", uuid(old.get("lot_id")), owner);
+    LocalDate today = LocalDate.now(ownerZone(owner));
+    db.update("update coffee_bag set mass_g=?,note=?,purchased_on=?::date,roasted_on=?::date,"
+            + "purchase_price=?,updated_at=now(),version=version+1 where id=? and owner_id=?",
+        Rules.number(in.getOrDefault("massG", old.get("mass_g")), "massG", 1, 5000, false),
+        in.containsKey("note") ? Rules.text(in, "note", 5000, false) : old.get("note"),
+        purchaseDate(in.getOrDefault("purchasedOn", old.get("purchased_on")), "purchasedOn", today),
+        purchaseDate(in.getOrDefault("roastedOn", old.get("roasted_on")), "roastedOn", today),
+        purchasePrice(in.getOrDefault("purchasePrice", old.get("purchase_price"))), id, owner);
+    return row("coffee_bag", id, owner);
+  }
+
+  private Map<String, Object> editable(String table, UUID owner, UUID id, Map<String, Object> in) {
+    db.queryForObject("select id from app_user where id=? for update", UUID.class, owner);
+    var record = row(table, id, owner);
+    version(record, in);
+    if (record.get("deleted_at") != null)
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Запись удалена");
+    return record;
+  }
+
+  private String purchaseDate(Object value, String field, LocalDate today) {
+    if (value == null) return null;
+    try {
+      LocalDate date = LocalDate.parse(value.toString());
+      if (!date.isAfter(today)) return date.toString();
+    } catch (java.time.format.DateTimeParseException ignored) {
+      // Report the same field error for malformed dates and future dates.
+    }
+    throw new Rules.Invalid(field, "Укажите корректную дату не позже сегодняшней");
+  }
+
+  private java.math.BigDecimal purchasePrice(Object value) {
+    if (value == null) return null;
+    try {
+      var price = new java.math.BigDecimal(value.toString());
+      if (price.signum() >= 0) return price;
+    } catch (NumberFormatException ignored) {
+      // Report a field error for non-numeric input.
+    }
+    throw new Rules.Invalid("purchasePrice", "Укажите неотрицательную цену");
+  }
+
   Map<String, Object> bag(UUID owner, Map<String, Object> in) {
     UUID lot;
     if (in.get("lotId") == null) {
-      lot = UUID.randomUUID();
-      db.update(
-          "insert into personal_lot(id,owner_id,name,roaster_name) values(?,?,?,?)",
-          lot,
-          owner,
-          Rules.text(in, "name", 200, true),
-          Rules.text(in, "roasterName", 120, false));
+      lot = uuid(lot(owner, in).get("id"));
     } else {
       lot = uuid(in.get("lotId"));
       active("personal_lot", lot, owner);
@@ -154,9 +214,11 @@ public class DiaryService {
         choice(
             in.getOrDefault("status", "ACTIVE"), "status", List.of("ACTIVE", "STOCK", "FINISHED"));
     var mass = Rules.number(in.getOrDefault("massG", 250), "massG", 1, 5000, false);
+    if (status == null) throw new Rules.Invalid("status", "Укажите статус");
+    LocalDate today = LocalDate.now(ownerZone(owner));
     db.update(
-        "insert into coffee_bag(id,owner_id,lot_id,mass_g,status,opened_at,finished_at,note)"
-            + " values(?,?,?,?,?, ?,?,?)",
+        "insert into coffee_bag(id,owner_id,lot_id,mass_g,status,opened_at,finished_at,note,"
+            + "purchased_on,roasted_on,purchase_price) values(?,?,?,?,?,?,?,?,?::date,?::date,?)",
         id,
         owner,
         lot,
@@ -164,7 +226,10 @@ public class DiaryService {
         status,
         status.equals("STOCK") ? null : Timestamp.from(Instant.now()),
         status.equals("FINISHED") ? Timestamp.from(Instant.now()) : null,
-        Rules.text(in, "note", 5000, false));
+        Rules.text(in, "note", 5000, false),
+        purchaseDate(in.get("purchasedOn"), "purchasedOn", today),
+        purchaseDate(in.get("roastedOn"), "roastedOn", today),
+        purchasePrice(in.get("purchasePrice")));
     db.update(
         "insert into bag_status_event(id,bag_id,to_status) values(?,?,?)",
         UUID.randomUUID(),

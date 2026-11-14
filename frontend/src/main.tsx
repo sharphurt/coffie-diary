@@ -206,16 +206,24 @@ export function App() {
       v = Object.fromEntries(f.entries()),
       m = modal!;
     await run(async () => {
+      if (m.type === "lot") {
+        await api(m.record ? `/lots/${m.record.id}` : "/lots", m.record ? "PATCH" : "POST",
+          { ...v, ...(m.record ? { version: m.record.version } : {}) }, m.record ? undefined : m.key);
+      }
       if (m.type === "bag")
         await api(
-          "/bags",
-          "POST",
+          m.record ? `/bags/${m.record.id}` : "/bags",
+          m.record ? "PATCH" : "POST",
           {
             ...v,
             massG: Number(v.massG),
+            purchasedOn: v.purchasedOn || null,
+            roastedOn: v.roastedOn || null,
+            purchasePrice: v.purchasePrice || null,
+            ...(m.record ? { version: m.record.version } : {}),
             ...(m.lotId ? { lotId: m.lotId } : {}),
           },
-          m.key,
+          m.record ? undefined : m.key,
         );
       if (m.type === "cup")
         await api("/consumptions", "POST", {
@@ -599,6 +607,9 @@ export function App() {
                 </button>
               ))}
             </div>
+            {kind === "lots" && !deleted && (
+              <button className="primary" onClick={() => open("lot")}>Создать лот</button>
+            )}
             <label className="check">
               <input
                 type="checkbox"
@@ -630,6 +641,12 @@ export function App() {
                   {kind === "bags" && <SensorySummary summary={r.sensory_summary} />}
                 </div>
                 <div className="row-actions">
+                  {kind === "lots" && !deleted && (
+                    <>
+                      <button disabled={busy} onClick={() => open("lot", { record: r })}>Изменить лот</button>
+                      <button disabled={busy} onClick={() => open("bag", { lotId: r.id, name: r.name })}>Добавить пачку</button>
+                    </>
+                  )}
                   {kind === "tastings" && !deleted && (
                     <button disabled={busy} onClick={() => open("tasting", { tasting: r })}>
                       Изменить
@@ -655,6 +672,7 @@ export function App() {
                     )}
                   {kind === "bags" && !deleted && (
                     <>
+                      <button disabled={busy} onClick={() => open("bag", { record: r, lotId: r.lot_id, name: r.name })}>Изменить пачку</button>
                       <button
                         onClick={() =>
                           open("bag", { lotId: r.lot_id, name: r.name })
@@ -812,8 +830,9 @@ export function App() {
             </button>
             <p className="eyebrow">МОЙ КОФЕ</p>
             <h2 id="dialog-title">
-              {modal.type === "bag"
-                ? "Новая пачка"
+              {modal.type === "lot" ? (modal.record ? "Изменить лот" : "Новый лот")
+                : modal.type === "bag"
+                ? (modal.record ? "Изменить пачку" : "Новая пачка")
                 : modal.type === "cup"
                   ? "Ещё одна чашка"
                   : modal.type === "editCup" ? "Изменить чашку"
@@ -821,14 +840,13 @@ export function App() {
             </h2>
             {modal.name && <p>{modal.name}</p>}
             <form onSubmit={save}>
-              {modal.type === "bag" && (
-                <>
-                  {!modal.lotId && (
+              {(modal.type === "lot" || (modal.type === "bag" && !modal.lotId)) && (
                     <>
                       <label>
                         Название кофе
                         <input
                           name="name"
+                          defaultValue={modal.record?.name ?? ""}
                           required
                           maxLength={200}
                           autoFocus
@@ -837,10 +855,12 @@ export function App() {
                       </label>
                       <label>
                         Обжарщик <small>необязательно</small>
-                        <input name="roasterName" maxLength={120} />
+                        <input name="roasterName" maxLength={120} defaultValue={modal.record?.roaster_name ?? ""} />
                       </label>
                     </>
-                  )}
+              )}
+              {modal.type === "bag" && (
+                <>
                   <div className="form-row">
                     <label>
                       Масса, г
@@ -850,21 +870,40 @@ export function App() {
                         step="any"
                         min={1}
                         max={5000}
-                        defaultValue={250}
+                        defaultValue={modal.record?.mass_g ?? 250}
                         required
                       />
                     </label>
-                    <label>
+                    {!modal.record && <label>
                       Статус
                       <select name="status">
                         <option value="ACTIVE">Пью сейчас</option>
                         <option value="STOCK">В запасе</option>
                       </select>
+                    </label>}
+                  </div>
+                  <div className="form-row">
+                    <label>Дата покупки
+                      <input type="date" name="purchasedOn" max={day()}
+                        value={modal.purchasedOn ?? modal.record?.purchased_on ?? ""}
+                        onChange={e => setModal({ ...modal, purchasedOn: e.target.value })} />
+                    </label>
+                    <label>Дата обжарки
+                      <input type="date" name="roastedOn" max={day()}
+                        value={modal.roastedOn ?? modal.record?.roasted_on ?? ""}
+                        onChange={e => setModal({ ...modal, roastedOn: e.target.value })} />
                     </label>
                   </div>
+                  {(modal.purchasedOn ?? modal.record?.purchased_on) &&
+                    (modal.roastedOn ?? modal.record?.roasted_on) >
+                    (modal.purchasedOn ?? modal.record?.purchased_on) &&
+                    <p role="status">Дата обжарки позже даты покупки. Проверьте даты.</p>}
+                  <label>Цена покупки, {modal.record?.currency ?? "RUB"}
+                    <input type="number" name="purchasePrice" min="0" step="any" defaultValue={modal.record?.purchase_price ?? ""} />
+                  </label>
                   <label>
                     Заметка
-                    <textarea name="note" maxLength={5000} />
+                    <textarea name="note" maxLength={5000} defaultValue={modal.record?.note ?? ""} />
                   </label>
                 </>
               )}

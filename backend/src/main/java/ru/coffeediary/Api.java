@@ -60,7 +60,7 @@ public class Api {
     return service.row(service.table(kind), id, owner(p));
   }
 
-  @PostMapping("/{kind:bags|tastings|consumptions}")
+  @PostMapping("/{kind:lots|bags|tastings|consumptions}")
   public Object create(
       Principal p,
       @PathVariable String kind,
@@ -76,6 +76,16 @@ public class Api {
   @PostMapping("/bags/{id}/status")
   public Object status(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
     return service.status(owner(p), id, in);
+  }
+
+  @PatchMapping("/lots/{id}")
+  public Object editLot(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
+    return service.editLot(owner(p), id, in);
+  }
+
+  @PatchMapping("/bags/{id}")
+  public Object editBag(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
+    return service.editBag(owner(p), id, in);
   }
 
   @GetMapping("/bags/{id}/status-history")

@@ -551,6 +551,7 @@ test('sensory averages count only measured values and update after deletion', as
   await page.getByRole('button', { name: /Сейчас/ }).click();
   await test.step('AC-08 form and API validation', () => checkValidation(page, info.project.name));
   await test.step('final impressions and equal weight per rated bag', () => checkLotRating(page));
+  await test.step('restore bag and lot history', () => checkRestoredHistory(page));
   await test.step('create and edit lots and bags separately', () => checkLotAndBagEditing(page, info.project.name));
 });
 
@@ -832,4 +833,59 @@ async function checkLotRating(page: Page) {
   await expect(page.getByRole('button', { name: /Далее/ })).toBeDisabled();
   await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
   await expect(page.getByLabel('Поиск по названию или обжарщику')).toHaveValue('');
+}
+
+async function checkRestoredHistory(page: Page) {
+  const base = '/api/v1';
+  const get = async (path: string) => (await (await page.request.get(base + path)).json());
+  const csrf = await get('/auth/csrf');
+  const headers = { [csrf.headerName]: csrf.token };
+  async function create(path: string, data: Record<string, unknown>) {
+    const response = await page.request.post(base + path, {
+      data, headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() },
+    });
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  }
+  const name = 'E2E restored history ' + crypto.randomUUID();
+  const bag = await create('/bags', { name });
+  const tasting = await create('/tastings', { bagId: bag.id, overallRating: 4, recordConsumption: true });
+  const independentlyDeleted = await create('/tastings', { bagId: bag.id, overallRating: 1 });
+  expect((await page.request.delete(base + '/tastings/' + independentlyDeleted.id + '?version=0', { headers })).status()).toBe(204);
+  const [cup] = (await get('/consumptions?q=' + encodeURIComponent(name)));
+  const transitions = await get('/bags/' + bag.id + '/status-history');
+  const initial = await totals(page);
+  const query = '?q=' + encodeURIComponent(name);
+  const lot = await get('/lots/' + bag.lot_id);
+
+  for (const parent of [{ path: '/bags/' + bag.id }, { path: '/lots/' + lot.id }]) {
+    const record = await get(parent.path);
+    const deleted = await page.request.delete(base + parent.path + '?version=' + record.version, { headers });
+    expect(deleted.status()).toBe(204);
+    expect(await get('/bags' + query)).toEqual([]);
+    expect(await get('/tastings' + query)).toEqual([]);
+    expect(await get('/consumptions' + query)).toEqual([
+      expect.objectContaining({ id: cup.id, tasting_id: tasting.id, bag_deleted: true, volume_ml: cup.volume_ml }),
+    ]);
+    expect(await totals(page)).toEqual(initial);
+    if (parent.path.startsWith('/bags/'))
+      expect(await get('/lots' + query)).toEqual([expect.objectContaining({ rating: null, rated_bags: 0 })]);
+    else expect(await get('/lots' + query)).toEqual([]);
+
+    const restored = await page.request.post(base + parent.path + '/restore', {
+      headers, data: { version: record.version + 1 },
+    });
+    expect(restored.status()).toBe(204);
+    expect(await get('/bags' + query)).toEqual([expect.objectContaining({
+      id: bag.id, created_at: bag.created_at, opened_at: bag.opened_at, status: bag.status, tasting_count: 1,
+    })]);
+    expect(await get('/tastings' + query)).toEqual([expect.objectContaining({ id: tasting.id })]);
+    expect(await get('/tastings/' + tasting.id)).toEqual(tasting);
+    expect(await get('/consumptions' + query)).toEqual([
+      expect.objectContaining({ id: cup.id, tasting_id: tasting.id, bag_deleted: false, bag_name: name }),
+    ]);
+    expect(await get('/bags/' + bag.id + '/status-history')).toEqual(transitions);
+    expect(await totals(page)).toEqual(initial);
+    expect(await get('/lots' + query)).toEqual([expect.objectContaining({ rating: 4, rated_bags: 1 })]);
+  }
 }

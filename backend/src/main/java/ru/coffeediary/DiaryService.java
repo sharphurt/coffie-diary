@@ -668,7 +668,8 @@ public class DiaryService {
       case "tastings" -> "select t.*,l.name,l.roaster_name,t.tasted_at history_date,t.tasted_at recent,t.overall_rating rating"
           + " from tasting t join coffee_bag b on b.id=t.bag_id and b.owner_id=t.owner_id"
           + " join personal_lot l on l.id=b.lot_id and l.owner_id=b.owner_id"
-          + " where t.owner_id=? and t.deleted_at" + condition;
+          + " where t.owner_id=? and t.deleted_at" + condition
+          + (deleted ? "" : " and b.deleted_at is null and l.deleted_at is null");
       case "bags" ->
           "select b.*,l.name,l.roaster_name,coalesce(b.purchased_on::timestamp at time zone u.timezone,b.created_at) history_date,"
               + " greatest(b.updated_at,(select max(c.consumed_at) from consumption_event c where c.bag_id=b.id"

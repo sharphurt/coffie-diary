@@ -55,10 +55,18 @@ public class DiaryService {
             out.put(
                 k,
                 v != null && v.getClass().getSimpleName().equals("PGobject")
-                    ? map(v)
+                    ? k.equals("wishes") ? Arrays.asList(wishArray(v)) : map(v)
                     : v instanceof Timestamp t ? t.toInstant().toString()
                     : v instanceof java.sql.Date date ? date.toLocalDate().toString() : v));
     return out;
+  }
+
+  private String[] wishArray(Object value) {
+    try {
+      return json.readValue(value.toString(), String[].class);
+    } catch (java.io.IOException e) {
+      throw new IllegalStateException("Invalid stored wishes", e);
+    }
   }
 
   List<Map<String, Object>> rows(String sql, Object... args) {
@@ -327,11 +335,17 @@ public class DiaryService {
       throw new ResponseStatusException(HttpStatus.CONFLICT, "Запись удалена");
     db.update(
         "update tasting set overall_rating=?,sensory=?::jsonb,repurchase=?,comment=?,"
+            + "tasted_at=?::timestamptz,brew_snapshot=?::jsonb,preparation_uncertain=?,wishes=?::jsonb,"
             + "version=version+1,updated_at=now() where id=? and owner_id=?",
         Rules.number(in.get("overallRating"), "overallRating", 1, 5, true).intValue(),
         json(Rules.sensory(in.get("sensory"))),
         choice(in.get("repurchase"), "repurchase", List.of("YES", "MAYBE", "NO")),
-        Rules.text(in, "comment", 5000, false), id, owner);
+        Rules.text(in, "comment", 5000, false),
+        in.containsKey("tastedAt") ? Rules.time(in.get("tastedAt")).toString() : current.get("tasted_at"),
+        json(in.containsKey("brewSnapshot") || in.containsKey("profileId")
+            ? tastingRecipe(owner, in, current) : current.get("brew_snapshot")),
+        in.getOrDefault("preparationUncertain", current.get("preparation_uncertain")),
+        in.containsKey("wishes") ? wishes(in.get("wishes")) : json(current.get("wishes")), id, owner);
     return row("tasting", id, owner);
   }
 
@@ -340,14 +354,11 @@ public class DiaryService {
     active("coffee_bag", bag, owner);
     UUID id = UUID.randomUUID();
     var rating = Rules.number(in.get("overallRating"), "overallRating", 1, 5, true);
-    var profile = profile(owner);
-    var defaultSnapshot = new LinkedHashMap<>(map(json(profile.get("recipe"))));
-    defaultSnapshot.put("profileName", profile.get("name"));
-    var snapshot = in.getOrDefault("brewSnapshot", defaultSnapshot);
+    var snapshot = tastingRecipe(owner, in, null);
     db.update(
         "insert into"
-            + " tasting(id,owner_id,bag_id,tasted_at,overall_rating,sensory,repurchase,comment,brew_snapshot,preparation_uncertain)"
-            + " values(?,?,?,?,?,?::jsonb,?,?,?::jsonb,?)",
+            + " tasting(id,owner_id,bag_id,tasted_at,overall_rating,sensory,repurchase,comment,brew_snapshot,preparation_uncertain,wishes)"
+            + " values(?,?,?,?,?,?::jsonb,?,?,?::jsonb,?,?::jsonb)",
         id,
         owner,
         bag,
@@ -357,7 +368,7 @@ public class DiaryService {
         choice(in.get("repurchase"), "repurchase", List.of("YES", "MAYBE", "NO")),
         Rules.text(in, "comment", 5000, false),
         json(snapshot),
-        Boolean.TRUE.equals(in.get("preparationUncertain")));
+        Boolean.TRUE.equals(in.get("preparationUncertain")), wishes(in.get("wishes")));
     if (in.get("consumptionEventId") != null) {
       UUID event = uuid(in.get("consumptionEventId"));
       var e = row("consumption_event", event, owner);
@@ -374,6 +385,68 @@ public class DiaryService {
       consumption(owner, c, id);
     }
     return row("tasting", id, owner);
+  }
+
+  private Map<String, Object> tastingRecipe(UUID owner, Map<String, Object> in, Map<String, Object> current) {
+    var snapshot = new LinkedHashMap<String, Object>();
+    if (current != null && !in.containsKey("profileId")) {
+      var previous = map(json(current.get("brew_snapshot")));
+      for (String key : List.of("profileName", "profileId", "grinder", "brewer"))
+        if (previous.containsKey(key)) snapshot.put(key, previous.get(key));
+    } else {
+      var selected = in.containsKey("profileId")
+          ? row("brew_profile", uuid(in.get("profileId")), owner) : profile(owner);
+      if (selected.get("deleted_at") != null)
+        throw new ResponseStatusException(HttpStatus.CONFLICT, "Профиль архивирован");
+      snapshot.putAll(map(json(selected.get("recipe"))));
+      snapshot.put("profileName", selected.get("name"));
+      if (in.containsKey("profileId")) {
+        snapshot.put("profileId", selected.get("id"));
+        snapshot.put("grinder", selected.get("grinder"));
+        snapshot.put("brewer", selected.get("brewer"));
+      }
+    }
+    if (in.containsKey("brewSnapshot")) {
+      snapshot.remove("grindClicks");
+      snapshot.putAll(validateRecipe(in.get("brewSnapshot")));
+    } else if (current == null) {
+      var grind = lastGrind(owner, uuid(in.get("bagId")));
+      if (!grind.isEmpty()) {
+        snapshot.remove("grindClicks");
+        snapshot.remove("grind");
+        snapshot.putAll(grind);
+      }
+    }
+    return snapshot;
+  }
+
+  public Map<String, Object> lastGrind(UUID owner, UUID bag) {
+    row("coffee_bag", bag, owner);
+    var previous = rows("select brew_snapshot from tasting where owner_id=? and bag_id=?"
+        + " and deleted_at is null and (brew_snapshot->>'grindClicks' is not null"
+        + " or nullif(brew_snapshot->>'grind','') is not null)"
+        + " order by tasted_at desc,created_at desc,id limit 1", owner, bag);
+    if (previous.isEmpty()) return Map.of();
+    var recipe = map(json(previous.getFirst().get("brew_snapshot")));
+    return recipe.get("grindClicks") != null ? Map.of("grindClicks", recipe.get("grindClicks"))
+        : Map.of("grind", recipe.get("grind"));
+  }
+
+  private String wishes(Object value) {
+    if (value == null) return "[]";
+    if (!(value instanceof List<?> items)) throw new Rules.Invalid("wishes", "Выберите пожелания");
+    var allowed = List.of("LESS_ACIDITY", "MORE_ACIDITY", "LESS_BITTERNESS", "MORE_SWEETNESS",
+        "LESS_DRYNESS", "MORE_BODY", "LESS_BODY", "MORE_AROMA", "NOTHING_TO_CHANGE");
+    var chosen = new LinkedHashSet<>();
+    for (Object item : items) {
+      if (!allowed.contains(Objects.toString(item, ""))) throw new Rules.Invalid("wishes", "Неизвестное пожелание");
+      chosen.add(item);
+    }
+    if ((chosen.contains("NOTHING_TO_CHANGE") && chosen.size() > 1)
+        || (chosen.contains("LESS_ACIDITY") && chosen.contains("MORE_ACIDITY"))
+        || (chosen.contains("LESS_BODY") && chosen.contains("MORE_BODY")))
+      throw new Rules.Invalid("wishes", "Пожелания противоречат друг другу");
+    return json(chosen);
   }
 
   @Transactional

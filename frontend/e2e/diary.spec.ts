@@ -57,7 +57,7 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   await row.getByRole('button', { name: 'Оценить', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('Чашка уже учтена');
   await page.getByLabel('Общее впечатление').selectOption('4');
-  await page.getByText('Подробнее о вкусе').click();
+  await expandTasting(page);
   await page.getByRole('combobox', { name: /^Сладость/ }).selectOption('UNKNOWN');
   await page.getByLabel('Ваши впечатления').fill(name + ' — понравилось');
   await save(page);
@@ -70,14 +70,14 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   expect(tasting.sensory.acidity).toEqual({ status: 'UNANSWERED', value: null });
   expect(tasting.sensory.sweetness).toEqual({ status: 'UNKNOWN', value: null });
   await row.getByRole('button', { name: 'Изменить', exact: true }).click();
-  await page.getByText('Подробнее о вкусе').click();
+  await expandTasting(page);
   await expect(page.getByRole('combobox', { name: /^Сладость/ })).toHaveValue('UNKNOWN');
   await expect(page.getByRole('combobox', { name: /^Кислотность/ })).toHaveValue('');
   await page.getByRole('combobox', { name: /^Кислотность/ }).selectOption('3');
   await expect(page.getByLabel('Также учесть выпитую чашку')).toHaveCount(0);
   await save(page);
   await row.getByRole('button', { name: 'Изменить', exact: true }).click();
-  await page.getByText('Подробнее о вкусе').click();
+  await expandTasting(page);
   await expect(page.getByRole('combobox', { name: /^Кислотность/ })).toHaveValue('3');
   await save(page);
   const edited = await (await page.request.get(`/api/v1/tastings/${tasting.id}`)).json();
@@ -453,11 +453,33 @@ test('sensory averages count only measured values and update after deletion', as
   for (const [value, comment] of [['2', 'first'], ['4', 'second'], ['', 'skipped'], ['UNKNOWN', 'unknown']]) {
     await card.getByRole('button', { name: 'Оценить', exact: true }).click();
     await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('4');
-    await page.getByText('Подробнее о вкусе').click();
+    await expandTasting(page);
+    if (comment === 'first') {
+      const profiles = await (await page.request.get('/api/v1/brew-profiles')).json();
+      await page.getByRole('combobox', { name: 'Профиль приготовления' }).selectOption(profiles[0].id);
+      await page.getByLabel(/Общее число щелчков/).fill('42');
+      await page.getByLabel('Доза кофе, г').fill('14.5');
+      await page.getByLabel(/Дата и время оценки/).fill('2020-01-02T10:00');
+      await page.getByLabel('Не уверен в приготовлении').check();
+      await page.getByLabel('Больше аромата').check();
+      await page.getByText('Подробнее о вкусе', { exact: false }).click();
+      await expect(page.getByLabel('Доза кофе, г')).toBeHidden();
+      await expandTasting(page);
+      await expect(page.getByLabel('Доза кофе, г')).toHaveValue('14.5');
+    } else {
+      await expect(page.getByLabel(/Общее число щелчков/)).toHaveValue('42');
+    }
     await page.getByRole('combobox', { name: /^Кислотность/ }).selectOption(value);
     if (comment === 'first') await page.getByRole('combobox', { name: /^Сладость/ }).selectOption('5');
     await page.getByLabel('Ваши впечатления').fill(name + ' ' + comment);
     await save(page);
+    if (comment === 'first') {
+      const ratings = await (await page.request.get('/api/v1/tastings')).json();
+      expect(ratings.find((rating: { comment: string }) => rating.comment === name + ' first')).toMatchObject({
+        tasted_at: '2020-01-02T05:00:00Z', preparation_uncertain: true, wishes: ['MORE_AROMA'],
+        brew_snapshot: { grindClicks: 42, doseG: 14.5, profileId: expect.any(String) },
+      });
+    }
   }
   await card.getByText('Сводка вкуса', { exact: true }).click();
   await expect(card.getByText('Кислотность: 3 из 5 (2 изм.)')).toBeVisible();
@@ -681,5 +703,12 @@ async function checkPhotos(page: Page, bagName: string, bagId: string, project: 
     await writeFile(process.env.E2E_MEDIA_STATE, JSON.stringify({
       bagName, bagId, ownBag, ids: [id, secondId], full: hash(imageBytes), thumb: hash(thumbBytes),
     }));
+  }
+}
+
+async function expandTasting(page: Page) {
+  const summary = page.getByText('Подробнее о вкусе', { exact: false });
+  if (!(await summary.evaluate(element => (element.parentElement as HTMLDetailsElement).open))) {
+    await summary.click();
   }
 }

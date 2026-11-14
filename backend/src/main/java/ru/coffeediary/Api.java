@@ -174,6 +174,11 @@ public class Api {
     return service.changeTastingLink(owner(p), id, null, Map.of("version", version));
   }
 
+  @GetMapping("/bags/{id}/last-grind")
+  public Object lastGrind(Principal p, @PathVariable UUID id) {
+    return service.lastGrind(owner(p), id);
+  }
+
   @PatchMapping("/tastings/{id}")
   public Object editTasting(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
     return service.editTasting(owner(p), id, in);

@@ -31,10 +31,29 @@ const recipeTexts = [
   { name: "filterNote", label: "Фильтр или заметка о рецепте", maxLength: 500 },
 ];
 
-function RecipeFields({ recipe }: { recipe?: Row }) {
+const tasteWishes = {
+  LESS_ACIDITY: "Меньше кислотности", MORE_ACIDITY: "Больше кислотности",
+  LESS_BITTERNESS: "Меньше горечи", MORE_SWEETNESS: "Больше сладости",
+  LESS_DRYNESS: "Меньше сухости", MORE_BODY: "Больше плотности",
+  LESS_BODY: "Меньше плотности", MORE_AROMA: "Больше аромата",
+  NOTHING_TO_CHANGE: "Ничего не менять",
+};
+
+function readRecipe(form: FormData) {
+  return Object.fromEntries([
+    ...["method", "milkSugar", ...recipeTexts.map(field => field.name)]
+      .map(name => [name, form.get(name) || null]),
+    ...recipeNumbers.map(({ name }) => {
+      const value = form.get(name);
+      return [name, value == null || value === "" ? null : Number(value)];
+    }),
+  ]);
+}
+
+function RecipeFields({ recipe, title = "Обычный рецепт" }: { recipe?: Row; title?: string }) {
   return (
     <>
-      <h3>Обычный рецепт</h3>
+      <h3>{title}</h3>
       {([{ name: "method", label: "Метод заваривания", options: brewMethods },
         { name: "milkSugar", label: "Молоко и сахар", options: additions }]).map(({name, label, options}) => (
         <label key={name}>{label}
@@ -218,7 +237,13 @@ export function App() {
   }
   function open(type: string, extra: Row = {}) {
     setError("");
-    setModal({ type, key: createId(), ...extra });
+    const key = createId();
+    setModal({ type, key, ...extra });
+    if (type === "tasting" && !extra.tasting && extra.bagId) {
+      void api(`/bags/${extra.bagId}/last-grind`).then(grind => {
+        setModal(current => current?.key === key && !current.recipeChanged ? { ...current, lastGrind: grind } : current);
+      }).catch(() => {});
+    }
   }
   async function cup(bag?: Row) {
     open("cup", { bagId: bag?.id, profileId: profile.id ?? "", volumeMl: profile.default_cup_volume_ml });
@@ -320,6 +345,13 @@ export function App() {
           repurchase: v.repurchase || null,
           comment: v.comment,
           sensory,
+          ...(v.tastedAt && (!m.tasting || new Date(`${v.tastedAt}+05:00`).getTime()
+            !== new Date(`${localCupTime(m.tasting.tasted_at)}+05:00`).getTime())
+            ? { tastedAt: new Date(`${v.tastedAt}+05:00`).toISOString() } : {}),
+          preparationUncertain: v.preparationUncertain === "on",
+          wishes: f.getAll("wishes"),
+          ...(m.recipeChanged || m.tastingProfileId ? { brewSnapshot: readRecipe(f) } : {}),
+          ...(m.tastingProfileId ? { profileId: m.tastingProfileId } : {}),
         };
         if (m.tasting) {
           await api(`/tastings/${m.tasting.id}`, "PATCH", { ...rating, version: m.tasting.version });
@@ -710,6 +742,9 @@ export function App() {
                         : r.status || "Личный лот"}
                   </p>
                   {r.comment && <p>{r.comment}</p>}
+                  {kind === "tastings" && r.wishes?.length > 0 && <p>
+                    {r.wishes.map((wish: keyof typeof tasteWishes) => tasteWishes[wish]).join(", ")}
+                  </p>}
                   {kind === "bags" && <SensorySummary summary={r.sensory_summary} />}
                 </div>
                 <div className="row-actions">
@@ -1127,7 +1162,14 @@ export function App() {
                       <option value="NO">Нет</option>
                     </select>
                   </label>
-                  <details>
+                  <details open={modal.detailed ?? localStorage.getItem("tasting-detailed") === "true"}
+                    onToggle={e => {
+                      const detailed = e.currentTarget.open;
+                      if (detailed !== (modal.detailed ?? localStorage.getItem("tasting-detailed") === "true")) {
+                        localStorage.setItem("tasting-detailed", String(detailed));
+                        setModal(current => current?.key === modal.key ? { ...current, detailed } : current);
+                      }
+                    }}>
                     <summary>Подробнее о вкусе · 6 шкал</summary>
                     <p className="muted">
                       Интенсивность ощущения, а не оценка качества: от 1 (не
@@ -1159,7 +1201,42 @@ export function App() {
                         </select>
                       </label>
                     ))}
+                    <label>Профиль приготовления
+                      <select value={modal.tastingProfileId ?? ""} onChange={e => {
+                        setModal({ ...modal, tastingProfileId: e.target.value, recipeChanged: false });
+                      }}>
+                        <option value="">{modal.tasting ? (modal.tasting.brew_snapshot?.profileName ?? "Сохранённый профиль") : "Профиль по умолчанию"}</option>
+                        {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      </select>
+                    </label>
+                    <div onChange={() => setModal(current => current ? {...current, recipeChanged: true} : current)}>
+                      <RecipeFields title="Рецепт этой чашки"
+                        key={`${modal.tastingProfileId ?? ""}:${JSON.stringify(modal.lastGrind ?? {})}`}
+                        recipe={(() => {
+                          const selected = profiles.find(item => item.id === modal.tastingProfileId);
+                          if (!selected && modal.tasting) return modal.tasting.brew_snapshot;
+                          const recipe = { ...(selected ?? profile).recipe };
+                          if (modal.lastGrind?.grindClicks != null || modal.lastGrind?.grind) {
+                            delete recipe.grindClicks;
+                            delete recipe.grind;
+                            Object.assign(recipe, modal.lastGrind);
+                          }
+                          return recipe;
+                        })()} />
+                    </div>
+                    <fieldset><legend>Пожелания к вкусу</legend>
+                      {Object.entries(tasteWishes).map(([value, label]) => (
+                        <label className="check" key={value}><input type="checkbox" name="wishes" value={value}
+                          defaultChecked={modal.tasting?.wishes?.includes(value)} />{label}</label>
+                      ))}
+                    </fieldset>
                   </details>
+                  <label>Дата и время оценки (Екатеринбург)
+                    <input name="tastedAt" type="datetime-local" step="1"
+                      defaultValue={modal.tasting ? localCupTime(modal.tasting.tasted_at) : ""} />
+                  </label>
+                  <label className="check"><input name="preparationUncertain" type="checkbox"
+                    defaultChecked={modal.tasting?.preparation_uncertain} />Не уверен в приготовлении</label>
                   <label>
                     Ваши впечатления
                     <textarea name="comment" maxLength={5000} defaultValue={modal.tasting?.comment ?? ""} />

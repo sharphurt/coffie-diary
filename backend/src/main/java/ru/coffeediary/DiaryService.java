@@ -314,10 +314,19 @@ public class DiaryService {
   }
 
   public List<Map<String, Object>> list(
-      UUID owner, String kind, int limit, int offset, boolean deleted, String query) {
+      UUID owner, String kind, int limit, int offset, boolean deleted, String query,
+      LocalDate start, LocalDate end) {
     limit = Math.clamp(limit, 1, 100);
     offset = Math.max(0, offset);
     String condition = deleted ? " is not null" : " is null";
+    if (kind.equals("consumptions") && (start != null || end != null)) {
+      validatePeriod(start, end);
+      ZoneId zone = ownerZone(owner);
+      return rows(
+          "select * from consumption_event where owner_id=? and deleted_at" + condition
+              + " and consumed_at>=? and consumed_at<? order by consumed_at desc,id limit ? offset ?",
+          owner, midnight(start, zone), midnight(end.plusDays(1), zone), limit, offset);
+    }
     if (kind.equals("bags"))
       return rows(
           "select b.*,l.name,l.roaster_name,(select avg(t.overall_rating) from tasting t where"
@@ -346,20 +355,31 @@ public class DiaryService {
         offset);
   }
 
-  public Map<String, Object> stats(UUID owner, LocalDate start, LocalDate end) {
-    if (end.isBefore(start) || start.plusYears(3).isBefore(end))
+  private void validatePeriod(LocalDate start, LocalDate end) {
+    if (start == null || end == null || end.isBefore(start) || start.plusYears(3).isBefore(end))
       throw new Rules.Invalid("period", "Выберите период до трёх лет");
-    String zone =
-        db.queryForObject("select timezone from app_user where id=?", String.class, owner);
+  }
+
+  private ZoneId ownerZone(UUID owner) {
+    return ZoneId.of(db.queryForObject("select timezone from app_user where id=?", String.class, owner));
+  }
+
+  private Timestamp midnight(LocalDate date, ZoneId zone) {
+    return Timestamp.from(date.atStartOfDay(zone).toInstant());
+  }
+
+  public Map<String, Object> stats(UUID owner, LocalDate start, LocalDate end) {
+    validatePeriod(start, end);
+    ZoneId zone = ownerZone(owner);
     var points =
         rows(
             "select (consumed_at at time zone ?)::date as local_day,count(*) cups,sum(volume_ml)"
                 + " volume from consumption_event where owner_id=? and deleted_at is null and"
                 + " consumed_at>=? and consumed_at<? group by local_day order by local_day",
-            zone,
+            zone.getId(),
             owner,
-            Timestamp.from(start.atStartOfDay(ZoneId.of(zone)).toInstant()),
-            Timestamp.from(end.plusDays(1).atStartOfDay(ZoneId.of(zone)).toInstant()));
+            midnight(start, zone),
+            midnight(end.plusDays(1), zone));
     var days = new ArrayList<Map<String, Object>>();
     long count = 0, volume = 0;
     for (LocalDate d = start; !d.isAfter(end); d = d.plusDays(1)) {
@@ -374,6 +394,6 @@ public class DiaryService {
       volume += v;
       days.add(Map.of("day", date, "cups", c, "volume", v));
     }
-    return Map.of("cups", count, "volume", volume, "days", days, "timezone", zone);
+    return Map.of("cups", count, "volume", volume, "days", days, "timezone", zone.getId());
   }
 }

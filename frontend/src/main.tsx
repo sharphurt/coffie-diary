@@ -43,19 +43,28 @@ export function App() {
     [end, setEnd] = useState(day()),
     [deleted, setDeleted] = useState(false),
     [offset, setOffset] = useState(0);
+  const refreshId = useRef(0);
   async function refresh() {
-    const [b, p, s] = await Promise.all([
+    const id = ++refreshId.current;
+    const cupHistory = page === "История" && kind === "consumptions";
+    const validPeriod = !!start && !!end && start <= end;
+    const today = day();
+    const period = page === "Сейчас" ? `start=${today}&end=${today}` : `start=${start}&end=${end}`;
+    const [b, p, s, rows] = await Promise.all([
       api("/bags?limit=100&q=" + encodeURIComponent(query)),
       api("/profile"),
-      api(
-        `/consumption-stats?start=${page === "Сейчас" ? day() : start}&end=${page === "Сейчас" ? day() : end}`,
-      ),
+      page === "Сейчас" || (cupHistory && validPeriod && !deleted)
+        ? api(`/consumption-stats?${period}`)
+        : null,
+      page === "История" && (!cupHistory || validPeriod)
+        ? api(`/${kind}?deleted=${deleted}&offset=${offset}${cupHistory ? "&" + period : ""}`)
+        : [],
     ]);
+    if (id !== refreshId.current) return;
     setBags(b);
     setProfile(p);
-    setStats(s);
-    if (page === "История")
-      setHistory(await api(`/${kind}?deleted=${deleted}&offset=${offset}`));
+    if (s) setStats(s);
+    setHistory(rows);
   }
   useEffect(() => {
     api("/auth/me")
@@ -475,13 +484,13 @@ export function App() {
         )}
         {page === "История" && (
           <>
-            <div className="filters">
+            {kind === "consumptions" && <div className="filters">
               <label>
                 С
                 <input
                   type="date"
                   value={start}
-                  onChange={(e) => setStart(e.target.value)}
+                  onChange={(e) => { setStart(e.target.value); setOffset(0); }}
                 />
               </label>
               <label>
@@ -489,13 +498,14 @@ export function App() {
                 <input
                   type="date"
                   value={end}
-                  onChange={(e) => setEnd(e.target.value)}
+                  onChange={(e) => { setEnd(e.target.value); setOffset(0); }}
                 />
               </label>
-              <b>
+              <button onClick={() => { const today = day(); setStart(today); setEnd(today); setOffset(0); }}>Сегодня</button>
+              {(!start || !end || start > end) ? <span>Укажите корректный период</span> : !deleted && <b>
                 {stats.cups} чашек · {stats.volume} мл за период
-              </b>
-            </div>
+              </b>}
+            </div>}
             <div className="tabs">
               {[
                 ["consumptions", "Выпито"],
@@ -519,7 +529,7 @@ export function App() {
               <input
                 type="checkbox"
                 checked={deleted}
-                onChange={(e) => setDeleted(e.target.checked)}
+                onChange={(e) => { setDeleted(e.target.checked); setOffset(0); }}
               />
               Показать удалённые
             </label>

@@ -49,8 +49,10 @@ public class Api {
       @RequestParam(defaultValue = "20") int limit,
       @RequestParam(defaultValue = "0") int offset,
       @RequestParam(defaultValue = "false") boolean deleted,
-      @RequestParam(defaultValue = "") String q) {
-    return service.list(owner(p), kind, limit, offset, deleted, q);
+      @RequestParam(defaultValue = "") String q,
+      @RequestParam(required = false) LocalDate start,
+      @RequestParam(required = false) LocalDate end) {
+    return service.list(owner(p), kind, limit, offset, deleted, q, start, end);
   }
 
   @GetMapping("/{kind:bags|lots|tastings|consumptions}/{id}")

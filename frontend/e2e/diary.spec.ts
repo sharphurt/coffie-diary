@@ -199,3 +199,31 @@ test('quick cup: lost response retries once, undo and rating notification', asyn
   await expect(page.getByRole('button', { name: 'Оценить чашку' })).toHaveCount(0);
   await expect(card).toContainText('★ 4.0');
 });
+
+test('cup history filters rows and totals by the same local day', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Пароль', { exact: true }).fill(process.env.OWNER_PASSWORD!);
+  await page.getByRole('button', { name: 'Открыть дневник' }).click();
+  await page.getByRole('button', { name: /История/ }).click();
+  const csrf = await (await page.request.get('/api/v1/auth/csrf')).json();
+  const label = 'E2E period ' + crypto.randomUUID();
+  for (const [suffix, consumedAt] of [
+    ['before', '2020-01-01T18:59:59Z'],
+    ['inside', '2020-01-01T19:00:00Z'],
+    ['after', '2020-01-02T19:00:00Z'],
+  ]) {
+    const response = await page.request.post('/api/v1/consumptions', {
+      headers: { [csrf.headerName]: csrf.token },
+      data: { clientEventId: crypto.randomUUID(), consumedAt, volumeMl: 123, coffeeLabel: label + ' ' + suffix },
+    });
+    expect(response.ok()).toBeTruthy();
+  }
+  await page.getByLabel('С', { exact: true }).fill('2020-01-02');
+  await page.getByLabel('По', { exact: true }).fill('2020-01-02');
+  await expect(page.getByText(label + ' inside', { exact: true })).toBeVisible();
+  await expect(page.getByText(label + ' before', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(label + ' after', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/123 мл за период|246 мл за период/)).toBeVisible();
+  await page.getByRole('button', { name: 'Сегодня', exact: true }).click();
+  await expect(page.getByText(label + ' inside', { exact: true })).toHaveCount(0);
+});

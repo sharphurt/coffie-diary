@@ -187,20 +187,22 @@ export function App() {
                   value: null,
                 };
         }
-        await api(
-          "/tastings",
-          "POST",
-          {
+        const rating = {
+          overallRating: Number(v.overallRating),
+          repurchase: v.repurchase || null,
+          comment: v.comment,
+          sensory,
+        };
+        if (m.tasting) {
+          await api(`/tastings/${m.tasting.id}`, "PATCH", { ...rating, version: m.tasting.version });
+        } else {
+          await api("/tastings", "POST", {
+            ...rating,
             bagId: m.bagId,
-            overallRating: Number(v.overallRating),
-            repurchase: v.repurchase || null,
-            comment: v.comment,
-            sensory,
             consumptionEventId: m.eventId || null,
             recordConsumption: v.recordConsumption === "on",
-          },
-          m.key,
-        );
+          }, m.key);
+        }
       }
       setModal(null);
       if (m.eventId && m.eventId === quick?.event?.id) setQuick(null);
@@ -567,6 +569,11 @@ export function App() {
                   {r.comment && <p>{r.comment}</p>}
                 </div>
                 <div className="row-actions">
+                  {kind === "tastings" && !deleted && (
+                    <button disabled={busy} onClick={() => open("tasting", { tasting: r })}>
+                      Изменить
+                    </button>
+                  )}
                   {kind === "consumptions" && !deleted && (
                     <button disabled={busy} onClick={() => open("editCup", { event: r })}>
                       Изменить
@@ -743,7 +750,8 @@ export function App() {
                 ? "Новая пачка"
                 : modal.type === "cup"
                   ? "Ещё одна чашка"
-                  : modal.type === "editCup" ? "Изменить чашку" : "Как вам кофе?"}
+                  : modal.type === "editCup" ? "Изменить чашку"
+                    : modal.tasting ? "Изменить оценку" : "Как вам кофе?"}
             </h2>
             {modal.name && <p>{modal.name}</p>}
             <form onSubmit={save}>
@@ -846,7 +854,7 @@ export function App() {
                 <>
                   <label>
                     Общее впечатление
-                    <select name="overallRating" required defaultValue="">
+                    <select name="overallRating" required defaultValue={modal.tasting?.overall_rating ?? ""}>
                       <option value="" disabled>
                         Выберите оценку
                       </option>
@@ -865,7 +873,7 @@ export function App() {
                   </label>
                   <label>
                     Купили бы ещё?
-                    <select name="repurchase">
+                    <select name="repurchase" defaultValue={modal.tasting?.repurchase ?? ""}>
                       <option value="">Пока не знаю</option>
                       <option value="YES">Да</option>
                       <option value="MAYBE">Возможно</option>
@@ -881,7 +889,10 @@ export function App() {
                     {Object.entries(dimensions).map(([k, n]) => (
                       <label key={k}>
                         {n}
-                        <select name={k}>
+                        <select name={k} defaultValue={
+                          modal.tasting?.sensory?.[k]?.status === "UNKNOWN"
+                            ? "UNKNOWN" : modal.tasting?.sensory?.[k]?.value ?? ""
+                        }>
                           <option value="">Пропустить</option>
                           <option value="UNKNOWN">Не могу оценить</option>
                           {[1, 2, 3, 4, 5].map((v) => (
@@ -904,9 +915,9 @@ export function App() {
                   </details>
                   <label>
                     Ваши впечатления
-                    <textarea name="comment" maxLength={5000} />
+                    <textarea name="comment" maxLength={5000} defaultValue={modal.tasting?.comment ?? ""} />
                   </label>
-                  {modal.eventId ? (
+                  {modal.tasting ? null : modal.eventId ? (
                     <p>✓ Чашка уже учтена</p>
                   ) : (
                     <label className="check">

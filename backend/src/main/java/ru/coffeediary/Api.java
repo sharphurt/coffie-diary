@@ -78,6 +78,11 @@ public class Api {
     return service.status(owner(p), id, in);
   }
 
+  @PatchMapping("/consumptions/{id}")
+  public Object editConsumption(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
+    return service.editConsumption(owner(p), id, in);
+  }
+
   @DeleteMapping("/{kind:bags|lots|tastings|consumptions}/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void delete(

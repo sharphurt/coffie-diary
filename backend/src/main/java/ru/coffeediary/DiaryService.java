@@ -201,6 +201,24 @@ public class DiaryService {
     return row("consumption_event", id, owner);
   }
 
+  @Transactional
+  public Map<String, Object> editConsumption(UUID owner, UUID id, Map<String, Object> in) {
+    db.queryForObject("select id from app_user where id=? for update", UUID.class, owner);
+    var current = row("consumption_event", id, owner);
+    version(current, in);
+    if (current.get("deleted_at") != null)
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Запись удалена");
+    if (in.get("consumedAt") == null)
+      throw new Rules.Invalid("consumedAt", "Укажите время чашки");
+    db.update(
+        "update consumption_event set consumed_at=?,volume_ml=?,comment=?,updated_at=now(),"
+            + "version=version+1 where id=? and owner_id=?",
+        Timestamp.from(Rules.time(in.get("consumedAt"))),
+        Rules.number(in.get("volumeMl"), "volumeMl", 10, 2000, true).intValue(),
+        Rules.text(in, "comment", 5000, false), id, owner);
+    return row("consumption_event", id, owner);
+  }
+
   Map<String, Object> tasting(UUID owner, Map<String, Object> in) {
     UUID bag = uuid(in.get("bagId"));
     active("coffee_bag", bag, owner);

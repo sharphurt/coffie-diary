@@ -23,6 +23,12 @@ const format = (v: string) =>
     hour: "2-digit",
     minute: "2-digit",
   });
+const localCupTime = (value: string) =>
+  new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Yekaterinburg",
+    dateStyle: "short",
+    timeStyle: "medium",
+  }).format(new Date(value)).replace(" ", "T");
 export function App() {
   const quickLock = useRef(false);
   const [quick, setQuick] = useState<{ request: Row; event?: Row; failed?: boolean } | null>(null);
@@ -161,6 +167,14 @@ export function App() {
           volumeMl: Number(v.volumeMl),
           coffeeLabel: v.coffeeLabel || null,
         });
+      if (m.type === "editCup") {
+        await api(`/consumptions/${m.event.id}`, "PATCH", {
+          version: m.event.version,
+          consumedAt: new Date(`${v.consumedAt}+05:00`).toISOString(),
+          volumeMl: Number(v.volumeMl),
+          comment: v.comment,
+        });
+      }
       if (m.type === "tasting") {
         const sensory: Row = {};
         for (const d of Object.keys(dimensions)) {
@@ -553,6 +567,11 @@ export function App() {
                   {r.comment && <p>{r.comment}</p>}
                 </div>
                 <div className="row-actions">
+                  {kind === "consumptions" && !deleted && (
+                    <button disabled={busy} onClick={() => open("editCup", { event: r })}>
+                      Изменить
+                    </button>
+                  )}
                   {kind === "consumptions" &&
                     r.bag_id &&
                     !r.tasting_id &&
@@ -724,7 +743,7 @@ export function App() {
                 ? "Новая пачка"
                 : modal.type === "cup"
                   ? "Ещё одна чашка"
-                  : "Как вам кофе?"}
+                  : modal.type === "editCup" ? "Изменить чашку" : "Как вам кофе?"}
             </h2>
             {modal.name && <p>{modal.name}</p>}
             <form onSubmit={save}>
@@ -803,6 +822,24 @@ export function App() {
                       />
                     </label>
                   )}
+                </>
+              )}
+              {modal.type === "editCup" && (
+                <>
+                  <label>
+                    Дата и время (Екатеринбург)
+                    <input name="consumedAt" type="datetime-local" step="1"
+                      defaultValue={localCupTime(modal.event.consumed_at)} required />
+                  </label>
+                  <label>
+                    Объём напитка, мл
+                    <input name="volumeMl" type="number" min={10} max={2000}
+                      defaultValue={modal.event.volume_ml} required />
+                  </label>
+                  <label>
+                    Заметка
+                    <textarea name="comment" maxLength={5000} defaultValue={modal.event.comment ?? ""} />
+                  </label>
                 </>
               )}
               {modal.type === "tasting" && (

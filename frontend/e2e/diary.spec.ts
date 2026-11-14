@@ -224,6 +224,27 @@ test('cup history filters rows and totals by the same local day', async ({ page 
   await expect(page.getByText(label + ' before', { exact: true })).toHaveCount(0);
   await expect(page.getByText(label + ' after', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/123 мл за период|246 мл за период/)).toBeVisible();
+  const row = page.locator('article.history-row').filter({ hasText: label + ' inside' });
+  const records = await (await page.request.get('/api/v1/consumptions?start=2020-01-02&end=2020-01-02')).json();
+  const original = records.find((record: { coffee_label: string }) => record.coffee_label === label + ' inside');
+  const before = await (await page.request.get('/api/v1/consumption-stats?start=2020-01-02&end=2020-01-02')).json();
+  await row.getByRole('button', { name: 'Изменить', exact: true }).click();
+  await expect(page.getByLabel(/Дата и время/)).toHaveValue('2020-01-02T00:00');
+  await page.getByLabel('Объём напитка, мл').fill('321');
+  await page.getByLabel('Заметка').fill('Исправленный объём');
+  await save(page);
+  await expect(row).toContainText('321 мл');
+  const stale = await page.request.patch(`/api/v1/consumptions/${original.id}`, {
+    headers: { [csrf.headerName]: csrf.token },
+    data: { version: original.version, consumedAt: original.consumed_at, volumeMl: 999 },
+  });
+  expect(stale.status()).toBe(409);
+  await expect(page.getByText(`${before.cups} чашек · ${before.volume + 198} мл за период`)).toBeVisible();
+  await row.getByRole('button', { name: 'Изменить', exact: true }).click();
+  await page.getByLabel(/Дата и время/).fill('2020-01-03T00:00');
+  await save(page);
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText(`${before.cups - 1} чашек · ${before.volume - 123} мл за период`)).toBeVisible();
   await page.getByRole('button', { name: 'Сегодня', exact: true }).click();
   await expect(page.getByText(label + ' inside', { exact: true })).toHaveCount(0);
 });

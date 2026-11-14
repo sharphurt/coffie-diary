@@ -77,6 +77,32 @@ public class Api {
     return service.updateProfile(owner(p), input);
   }
 
+  @GetMapping("/brew-profiles")
+  public Object brewProfiles(Principal p) {
+    return service.brewProfiles(owner(p));
+  }
+
+  @PostMapping("/brew-profiles")
+  public Object createBrewProfile(Principal p, @RequestBody Map<String, Object> input) {
+    return service.createBrewProfile(owner(p), input);
+  }
+
+  @PatchMapping("/brew-profiles/{id}")
+  public Object editBrewProfile(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> input) {
+    return service.editBrewProfile(owner(p), id, input);
+  }
+
+  @DeleteMapping("/brew-profiles/{id}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void archiveBrewProfile(Principal p, @PathVariable UUID id, @RequestParam long version) {
+    service.archiveBrewProfile(owner(p), id, version);
+  }
+
+  @PutMapping("/profile/default-brew-profile")
+  public Object defaultBrewProfile(Principal p, @RequestBody Map<String, Object> input) {
+    return service.setDefaultBrewProfile(owner(p), service.uuid(input.get("profileId")));
+  }
+
   @GetMapping("/{kind:bags|lots|tastings|consumptions}")
   public Object list(
       Principal p,

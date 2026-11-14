@@ -48,13 +48,16 @@ public class Security {
             id,
             login,
             encoder.encode(password));
+        UUID profileId = UUID.randomUUID();
         db.update(
-            "insert into brew_profile(id,owner_id,name,default_cup_volume_ml,recipe)"
-                + " values(?,?,?,250,?::jsonb)",
-            UUID.randomUUID(),
+            "insert into brew_profile(id,owner_id,name,default_cup_volume_ml,recipe,grinder,brewer)"
+                + " values(?,?,?,250,?::jsonb,?,?)",
+            profileId,
             id,
             "Race M1 + Kitfort КТ-7570",
-            "{\"method\":\"AUTO_POUR_OVER\",\"milkSugar\":\"NONE\"}");
+            "{\"method\":\"AUTO_POUR_OVER\",\"milkSugar\":\"NONE\"}",
+            "MHW-3BOMBER Race M1", "Kitfort КТ-7570");
+        db.update("update app_user set default_brew_profile_id=? where id=?", profileId, id);
       }
     };
   }

@@ -147,6 +147,9 @@ export function App() {
     [history, setHistory] = useState<Row[]>([]),
     [kind, setKind] = useState("consumptions"),
     [profile, setProfile] = useState<Row>({ default_cup_volume_ml: 250 }),
+    [profiles, setProfiles] = useState<Row[]>([]),
+    [quickProfile, setQuickProfile] = useState(""),
+    [editingProfile, setEditingProfile] = useState<string | null>(null),
     [stats, setStats] = useState<Row>({ cups: 0, volume: 0 }),
     [modal, setModal] = useState<Row | null>(null),
     [busy, setBusy] = useState(false),
@@ -164,7 +167,7 @@ export function App() {
     const validPeriod = !!start && !!end && start <= end;
     const today = day();
     const period = page === "Сейчас" ? `start=${today}&end=${today}` : `start=${start}&end=${end}`;
-    const [b, p, s, rows] = await Promise.all([
+    const [b, p, s, rows, equipment] = await Promise.all([
       api("/bags?limit=100&q=" + encodeURIComponent(query)),
       api("/profile"),
       page === "Сейчас" || (cupHistory && validPeriod && !deleted)
@@ -173,10 +176,12 @@ export function App() {
       page === "История" && (!cupHistory || validPeriod)
         ? api(`/${kind}?deleted=${deleted}&offset=${offset}${cupHistory ? "&" + period : ""}`)
         : [],
+      api("/brew-profiles"),
     ]);
     if (id !== refreshId.current) return;
     setBags(b);
     setProfile(p);
+    setProfiles(equipment);
     if (s) setStats(s);
     setHistory(rows);
   }
@@ -216,8 +221,10 @@ export function App() {
     setModal({ type, key: createId(), ...extra });
   }
   async function cup(bag?: Row) {
-    open("cup", { bagId: bag?.id, volumeMl: profile.default_cup_volume_ml });
+    open("cup", { bagId: bag?.id, profileId: profile.id ?? "", volumeMl: profile.default_cup_volume_ml });
   }
+  const selectedQuick = profiles.find(item => item.id === quickProfile) ?? profile;
+  const settingsProfile = profiles.find(item => item.id === editingProfile) ?? profile;
   async function quickCup(request: Row) {
     if (quickLock.current) return;
     quickLock.current = true;
@@ -283,6 +290,7 @@ export function App() {
       if (m.type === "cup")
         await api("/consumptions", "POST", {
           bagId: m.bagId || null,
+          profileId: m.profileId || null,
           clientEventId: m.key,
           volumeMl: Number(v.volumeMl),
           coffeeLabel: v.coffeeLabel || null,
@@ -443,6 +451,8 @@ export function App() {
               run(async () => {
                 await api("/auth/logout", "POST");
                 setUser(null);
+                setQuickProfile("");
+                setEditingProfile(null);
                 setQuick(null);
                 await refreshCsrf();
               }, "", false)
@@ -504,6 +514,11 @@ export function App() {
               <button className="light" disabled={busy} onClick={() => cup()}>
                 ＋ Выпил другой кофе
               </button>
+              {profiles.length > 1 && <label>Профиль для быстрого учёта
+                <select value={selectedQuick.id ?? ""} onChange={e => setQuickProfile(e.target.value)}>
+                  {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>}
             </section>
             <div className="section-title">
               <h2>
@@ -544,9 +559,9 @@ export function App() {
                       <button
                         disabled={busy || !!(quick && !quick.event)}
                         className="primary wide"
-                        onClick={() => quickCup({ bagId: b.id, volumeMl: profile.default_cup_volume_ml, clientEventId: createId() })}
+                        onClick={() => quickCup({ bagId: b.id, profileId: selectedQuick.id, volumeMl: selectedQuick.default_cup_volume_ml, clientEventId: createId() })}
                       >
-                        Выпил чашку · {profile.default_cup_volume_ml} мл
+                        Выпил чашку · {selectedQuick.default_cup_volume_ml} мл
                       </button>
                       <SensorySummary summary={b.sensory_summary} />
                       <div className="card-actions">
@@ -826,8 +841,27 @@ export function App() {
         {page === "Настройки" && (
           <section className="settings">
             <h2>Оборудование и чашка</h2>
+            <label>Редактируемый профиль
+              <select value={editingProfile === "new" ? "new" : settingsProfile.id ?? ""}
+                onChange={e => setEditingProfile(e.target.value)}>
+                {profiles.map(item => <option key={item.id} value={item.id}>
+                  {item.name}{item.id === profile.id ? " (по умолчанию)" : ""}
+                </option>)}
+                <option value="new">Создать профиль</option>
+              </select>
+            </label>
+            {editingProfile !== "new" && settingsProfile.id !== profile.id && <>
+              <button disabled={busy} onClick={() => run(async () => {
+                await api("/profile/default-brew-profile", "PUT", { profileId: settingsProfile.id });
+                setQuickProfile("");
+              })}>Сделать профилем по умолчанию</button>
+              <button disabled={busy} onClick={() => run(async () => {
+                await api(`/brew-profiles/${settingsProfile.id}?version=${settingsProfile.version}`, "DELETE");
+                setEditingProfile(null);
+              })}>Архивировать профиль</button>
+            </>}
             <form
-              key={profile.version}
+              key={editingProfile === "new" ? "new" : `${settingsProfile.id}:${settingsProfile.version}`}
               onSubmit={(e) => {
                 e.preventDefault();
                 const f = new FormData(e.currentTarget);
@@ -839,21 +873,25 @@ export function App() {
                     return [name, value === "" ? null : Number(value)];
                   }),
                 ]);
-                run(() =>
-                  api("/profile", "PATCH", {
+                run(async () => {
+                  const creating = editingProfile === "new";
+                  const saved = await api(creating ? "/brew-profiles" : `/brew-profiles/${settingsProfile.id}`, creating ? "POST" : "PATCH", {
                     name: f.get("name"),
                     defaultCupVolumeMl: Number(f.get("volume")),
-                    version: profile.version,
+                    version: settingsProfile.version,
+                    grinder: f.get("grinder"),
+                    brewer: f.get("brewer"),
                     recipe,
-                  }),
-                );
+                  });
+                  setEditingProfile(saved.id);
+                });
               }}
             >
               <label>
                 Название профиля
                 <input
                   name="name"
-                  defaultValue={profile.name}
+                  defaultValue={editingProfile === "new" ? "" : settingsProfile.name}
                   required
                   maxLength={200}
                 />
@@ -865,7 +903,7 @@ export function App() {
                   type="number"
                   min={10}
                   max={2000}
-                  defaultValue={profile.default_cup_volume_ml}
+                  defaultValue={editingProfile === "new" ? 250 : settingsProfile.default_cup_volume_ml}
                   required
                 />
               </label>
@@ -873,7 +911,13 @@ export function App() {
                 Это объём напитка, который вы выпиваете, а не воды для
                 заваривания. Старые записи сохранят свой объём.
               </p>
-              <RecipeFields recipe={profile.recipe} />
+              <label>Кофемолка
+                <input name="grinder" maxLength={200} defaultValue={editingProfile === "new" ? "" : settingsProfile.grinder ?? ""} />
+              </label>
+              <label>Кофеварка
+                <input name="brewer" maxLength={200} defaultValue={editingProfile === "new" ? "" : settingsProfile.brewer ?? ""} />
+              </label>
+              <RecipeFields recipe={editingProfile === "new" ? undefined : settingsProfile.recipe} />
               <button className="primary" disabled={busy}>
                 Сохранить настройки
               </button>
@@ -996,6 +1040,15 @@ export function App() {
               )}
               {modal.type === "cup" && (
                 <>
+                  <label>Профиль чашки
+                    <select value={modal.profileId} onChange={e => {
+                      const id = e.target.value;
+                      setModal({ ...modal, profileId: id, volumeMl: profiles.find(item => item.id === id)?.default_cup_volume_ml ?? 250 });
+                    }}>
+                      <option value="">Без профиля</option>
+                      {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
                   <p>
                     {modal.bagId
                       ? "Из выбранной пачки"
@@ -1006,6 +1059,7 @@ export function App() {
                     <input
                       autoFocus
                       name="volumeMl"
+                      key={modal.profileId}
                       type="number"
                       min={10}
                       max={2000}

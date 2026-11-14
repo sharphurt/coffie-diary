@@ -68,8 +68,9 @@ public class DiaryService {
   Map<String, Object> profile(UUID owner) {
     return clean(
         db.queryForMap(
-            "select * from brew_profile where owner_id=? and deleted_at is null order by id limit"
-                + " 1",
+            "select p.* from brew_profile p join app_user u on u.id=p.owner_id"
+                + " where p.owner_id=? and p.deleted_at is null"
+                + " order by (p.id is distinct from u.default_brew_profile_id),p.id limit 1",
             owner));
   }
 
@@ -241,10 +242,18 @@ public class DiaryService {
   Map<String, Object> consumption(UUID owner, Map<String, Object> in, UUID tasting) {
     UUID id = UUID.randomUUID(), bag = in.get("bagId") == null ? null : uuid(in.get("bagId"));
     if (bag != null) active("coffee_bag", bag, owner);
-    var p = profile(owner);
+    Map<String, Object> p = profile(owner);
+    if (in.containsKey("profileId")) {
+      if (in.get("profileId") == null) p = Map.of();
+      else {
+        p = row("brew_profile", uuid(in.get("profileId")), owner);
+        if (p.get("deleted_at") != null)
+          throw new ResponseStatusException(HttpStatus.CONFLICT, "Профиль архивирован");
+      }
+    }
     var volume =
         Rules.number(
-            in.getOrDefault("volumeMl", p.get("default_cup_volume_ml")),
+            in.getOrDefault("volumeMl", p.getOrDefault("default_cup_volume_ml", 250)),
             "volumeMl",
             10,
             2000,
@@ -414,22 +423,62 @@ public class DiaryService {
   @Transactional
   public Map<String, Object> updateProfile(UUID owner, Map<String, Object> input) {
     var old = profile(owner);
+    return editBrewProfile(owner, uuid(old.get("id")), input);
+  }
+
+  public Object brewProfiles(UUID owner) {
+    return rows("select * from brew_profile where owner_id=? and deleted_at is null order by name,id", owner);
+  }
+
+  @Transactional
+  public Object createBrewProfile(UUID owner, Map<String, Object> input) {
+    UUID id = UUID.randomUUID();
+    db.update("insert into brew_profile(id,owner_id,name,default_cup_volume_ml,recipe,grinder,brewer)"
+            + " values(?,?,?,?,?::jsonb,?,?)",
+        id, owner, Rules.text(input,"name",200,true),
+        Rules.number(input.getOrDefault("defaultCupVolumeMl",250),"defaultCupVolumeMl",10,2000,true).intValue(),
+        json(input.containsKey("recipe") ? validateRecipe(input.get("recipe")) : Map.of()),
+        Rules.text(input,"grinder",200,false), Rules.text(input,"brewer",200,false));
+    return row("brew_profile", id, owner);
+  }
+
+  @Transactional
+  public Map<String, Object> setDefaultBrewProfile(UUID owner, UUID id) {
+    db.queryForObject("select id from app_user where id=? for update", UUID.class, owner);
+    active("brew_profile", id, owner);
+    db.update("update app_user set default_brew_profile_id=? where id=?", id, owner);
+    return profile(owner);
+  }
+
+  @Transactional
+  public void archiveBrewProfile(UUID owner, UUID id, long version) {
+    editable("brew_profile", owner, id, Map.of("version", version));
+    if (id.equals(profile(owner).get("id")))
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала выберите другой профиль по умолчанию");
+    db.update("update brew_profile set deleted_at=now(),version=version+1 where id=? and owner_id=?", id, owner);
+  }
+
+  @Transactional
+  public Map<String, Object> editBrewProfile(UUID owner, UUID id, Map<String, Object> input) {
+    var old = editable("brew_profile", owner, id, input);
     version(old, input);
     int volume =
         Rules.number(input.get("defaultCupVolumeMl"), "defaultCupVolumeMl", 10, 2000, true)
             .intValue();
     int count =
         db.update(
-            "update brew_profile set name=?,default_cup_volume_ml=?,recipe=?::jsonb,version=version+1 where id=?"
+            "update brew_profile set name=?,default_cup_volume_ml=?,recipe=?::jsonb,grinder=?,brewer=?,version=version+1 where id=?"
                 + " and owner_id=? and version=?",
             Rules.text(input, "name", 200, true),
             volume,
             json(input.containsKey("recipe") ? validateRecipe(input.get("recipe")) : old.get("recipe")),
+            input.containsKey("grinder") ? Rules.text(input,"grinder",200,false) : old.get("grinder"),
+            input.containsKey("brewer") ? Rules.text(input,"brewer",200,false) : old.get("brewer"),
             old.get("id"),
             owner,
             old.get("version"));
     if (count != 1) throw new ResponseStatusException(HttpStatus.CONFLICT);
-    return profile(owner);
+    return row("brew_profile", id, owner);
   }
 
   private Map<String, Object> validateRecipe(Object value) {

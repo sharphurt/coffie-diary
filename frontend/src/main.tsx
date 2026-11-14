@@ -611,7 +611,9 @@ export function App() {
               <article className="history-row" key={r.id}>
                 <div>
                   <b>
-                    {r.name ||
+                    {kind === "consumptions"
+                      ? r.bag_deleted ? "Удалённая пачка" : r.bag_name || r.coffee_label || "Неизвестный кофе"
+                      : r.name ||
                       bags.find((b) => b.id === r.bag_id)?.name ||
                       (r.bag_id
                         ? "Удалённая или архивная пачка"
@@ -640,6 +642,7 @@ export function App() {
                   )}
                   {kind === "consumptions" &&
                     r.bag_id &&
+                    !r.bag_deleted &&
                     !r.tasting_id &&
                     !deleted && (
                       <button

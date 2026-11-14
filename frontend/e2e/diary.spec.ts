@@ -21,6 +21,19 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   await page.getByLabel('Пароль', { exact: true }).fill(process.env.OWNER_PASSWORD!);
   await page.getByRole('button', { name: 'Открыть дневник' }).click();
   await expect(page.getByRole('button', { name: /Добавить кофе/ })).toBeVisible();
+  if (process.env.E2E_FRESH_DATABASE === 'true' && info.project.name === 'desktop') {
+    await test.step('AC-14 unknown coffee in an empty diary', async () => {
+      expect(await (await page.request.get('/api/v1/lots')).json()).toEqual([]);
+      expect(await totals(page)).toMatchObject({ cups: 0, volume: 0 });
+      await page.getByRole('button', { name: /Выпил другой кофе/ }).click();
+      await page.getByLabel('Объём напитка, мл').fill('200');
+      await save(page);
+      expect(await totals(page)).toMatchObject({ cups: 1, volume: 200 });
+      expect(await (await page.request.get('/api/v1/lots')).json()).toEqual([]);
+      expect(await (await page.request.get('/api/v1/consumptions')).json())
+        .toEqual([expect.objectContaining({ bag_id: null, volume_ml: 200 })]);
+    });
+  }
   const initial = await totals(page);
   const name = `E2E ${info.project.name} ${Date.now()}`;
   await page.getByRole('button', { name: /Добавить кофе/ }).click();
@@ -100,11 +113,32 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   await expect(row).toContainText('FINISHED');
   await row.getByRole('button', { name: 'Открыть', exact: true }).click();
   await expect(row).toContainText('ACTIVE');
+  const prior = await (await page.request.get(`/api/v1/bags/${tasting.bag_id}`)).json();
+  const savedRating = await (await page.request.get(`/api/v1/tastings/${tasting.id}`)).json();
+  const transitions = await page.request.get(`/api/v1/bags/${prior.id}/status-history`);
+  expect(transitions.ok()).toBeTruthy();
+  expect((await transitions.json()).map((event: { from_status: string; to_status: string }) =>
+    [event.from_status, event.to_status])).toEqual([[null, 'ACTIVE'], ['ACTIVE', 'FINISHED'], ['FINISHED', 'ACTIVE']]);
   await row.getByRole('button', { name: 'Купил ещё', exact: true }).click();
   await save(page);
   await expect(row).toHaveCount(2);
+  expect(await (await page.request.get(`/api/v1/bags/${prior.id}`)).json()).toEqual(prior);
+  expect(await (await page.request.get(`/api/v1/tastings/${tasting.id}`)).json()).toEqual(savedRating);
+  const purchases = await (await page.request.get('/api/v1/bags?q=' + encodeURIComponent(name))).json();
+  expect(purchases.filter((bag: { id: string; lot_id: string }) => bag.id !== prior.id && bag.lot_id === prior.lot_id)).toHaveLength(1);
+  const csrf = await (await page.request.get('/api/v1/auth/csrf')).json();
+  const deletion = await page.request.delete(`/api/v1/bags/${prior.id}?version=${prior.version}`, {
+    headers: { [csrf.headerName]: csrf.token },
+  });
+  expect(deletion.status()).toBe(204);
+  await page.getByRole('button', { name: 'Выпито', exact: true }).click();
+  const deletedBagCup = page.locator('article.history-row').filter({ hasText: 'Удалённая пачка' })
+    .filter({ hasText: '250 мл' });
+  await expect(deletedBagCup.first().getByText('Удалённая пачка', { exact: true })).toBeVisible();
+  await expect(deletedBagCup.getByRole('button', { name: 'Оценить', exact: true })).toHaveCount(0);
+  expect(await totals(page)).toMatchObject({ cups: initial.cups + 1, volume: initial.volume + 250 });
   await page.getByRole('button', { name: /Сейчас/ }).click();
-  await expect(card).toHaveCount(2);
+  await expect(card).toHaveCount(1);
 
   await page.getByRole('button', { name: /Выпил другой кофе/ }).click();
   await page.getByLabel('Объём напитка, мл').fill('200');

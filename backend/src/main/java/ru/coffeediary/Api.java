@@ -78,6 +78,11 @@ public class Api {
     return service.status(owner(p), id, in);
   }
 
+  @GetMapping("/bags/{id}/status-history")
+  public Object bagStatusHistory(Principal p, @PathVariable UUID id) {
+    return service.bagStatusHistory(owner(p), id);
+  }
+
   @PatchMapping("/consumptions/{id}")
   public Object editConsumption(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> in) {
     return service.editConsumption(owner(p), id, in);

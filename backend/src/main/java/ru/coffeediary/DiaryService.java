@@ -382,19 +382,38 @@ public class DiaryService {
     };
   }
 
+  public List<Map<String, Object>> bagStatusHistory(UUID owner, UUID id) {
+    row("coffee_bag", id, owner);
+    return rows("select * from bag_status_event where bag_id=? order by changed_at,id", id);
+  }
+
   public List<Map<String, Object>> list(
       UUID owner, String kind, int limit, int offset, boolean deleted, String query,
       LocalDate start, LocalDate end) {
     limit = Math.clamp(limit, 1, 100);
     offset = Math.max(0, offset);
     String condition = deleted ? " is not null" : " is null";
-    if (kind.equals("consumptions") && (start != null || end != null)) {
-      validatePeriod(start, end);
-      ZoneId zone = ownerZone(owner);
+    if (kind.equals("consumptions")) {
+      var args = new ArrayList<Object>();
+      args.add(owner);
+      String period = "";
+      if (start != null || end != null) {
+        validatePeriod(start, end);
+        ZoneId zone = ownerZone(owner);
+        period = " and c.consumed_at>=? and c.consumed_at<?";
+        args.add(midnight(start, zone));
+        args.add(midnight(end.plusDays(1), zone));
+      }
+      args.add(limit);
+      args.add(offset);
       return rows(
-          "select * from consumption_event where owner_id=? and deleted_at" + condition
-              + " and consumed_at>=? and consumed_at<? order by consumed_at desc,id limit ? offset ?",
-          owner, midnight(start, zone), midnight(end.plusDays(1), zone), limit, offset);
+          "select c.*, (b.deleted_at is not null or l.deleted_at is not null) bag_deleted,"
+              + " case when b.deleted_at is null and l.deleted_at is null then l.name end bag_name"
+              + " from consumption_event c left join coffee_bag b on b.id=c.bag_id and b.owner_id=c.owner_id"
+              + " left join personal_lot l on l.id=b.lot_id and l.owner_id=b.owner_id"
+              + " where c.owner_id=? and c.deleted_at" + condition + period
+              + " order by c.consumed_at desc,c.id limit ? offset ?",
+          args.toArray());
     }
     if (kind.equals("bags"))
       return rows(

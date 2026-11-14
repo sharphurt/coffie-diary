@@ -17,6 +17,7 @@ $env:SERVER_PORT = '18089'
 $env:SERVER_ADDRESS = '127.0.0.1'
 $env:COOKIE_SECURE = 'false'
 $env:E2E_BASE_URL = 'http://127.0.0.1:18089'
+$env:E2E_FRESH_DATABASE = 'true'
 $env:SPRING_WEB_RESOURCES_STATIC_LOCATIONS = 'file:' + ($root.Replace('\','/') + '/frontend/dist/')
 $javaProcess = $null
 $pgStarted = $false

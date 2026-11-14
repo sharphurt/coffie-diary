@@ -294,4 +294,65 @@ test('sensory averages count only measured values and update after deletion', as
   await card.getByText('Сводка вкуса', { exact: true }).click();
   await expect(card.getByText('Кислотность: 4 из 5 (1 изм.)')).toBeVisible();
   await expect(card.getByText(/Сладость:/)).toHaveCount(0);
+  await test.step('AC-08 form and API validation', () => checkValidation(page, info.project.name));
 });
+
+async function checkValidation(page: Page, project: string) {
+  await page.getByRole('button', { name: /Добавить кофе/ }).click();
+  const name = 'E2E validation ' + project + ' ' + crypto.randomUUID();
+  await page.getByLabel('Название кофе').fill(name);
+  const mass = page.getByLabel('Масса, г');
+  await mass.fill('-1');
+  await page.getByRole('dialog').getByRole('button', { name: 'Сохранить', exact: true }).click();
+  expect(await mass.evaluate((input: HTMLInputElement) => input.validity.rangeUnderflow)).toBe(true);
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await mass.fill('250.5');
+  await save(page);
+
+  const card = page.locator('article.card').filter({ hasText: name });
+  await card.getByRole('button', { name: 'Оценить', exact: true }).click();
+  const rating = page.getByRole('combobox', { name: 'Общее впечатление' });
+  expect(await rating.locator('option:not(:disabled)').evaluateAll(options =>
+    options.map(option => (option as HTMLOptionElement).value))).toEqual(['1', '2', '3', '4', '5']);
+  await page.getByRole('dialog').getByRole('button', { name: 'Сохранить', exact: true }).click();
+  expect(await rating.evaluate((input: HTMLSelectElement) => input.validity.valueMissing)).toBe(true);
+  const comment = page.getByLabel('Ваши впечатления');
+  await comment.fill('x'.repeat(5001));
+  expect((await comment.inputValue()).length).toBe(5000);
+  await rating.selectOption('5');
+  await save(page);
+
+  const csrf = await (await page.request.get('/api/v1/auth/csrf')).json();
+  const bags = await (await page.request.get('/api/v1/bags?q=' + encodeURIComponent(name))).json();
+  expect(Number(bags[0].mass_g)).toBe(250.5);
+  const bagId = bags[0].id;
+  async function rejected(path: string, data: Record<string, unknown>, field: string, method = 'POST') {
+    const response = await page.request.fetch('/api/v1' + path, {
+      method, data,
+      headers: { [csrf.headerName]: csrf.token, 'Idempotency-Key': crypto.randomUUID() },
+    });
+    expect(response.status()).toBe(422);
+    expect(await response.json()).toMatchObject({ fieldErrors: { [field]: expect.any(String) } });
+  }
+  for (const value of [-1, 5001]) {
+    await rejected('/bags', { name: 'Rejected ' + name, massG: value }, 'massG');
+  }
+  for (const value of [0, 6, 2.5]) {
+    await rejected('/tastings', { bagId, overallRating: value }, 'overallRating');
+  }
+  await rejected('/tastings', { bagId, overallRating: 5, comment: 'x'.repeat(5001) }, 'comment');
+  const tastings = await (await page.request.get('/api/v1/tastings')).json();
+  const tasting = tastings.find((record: { bag_id: string }) => record.bag_id === bagId);
+  expect(tasting.comment).toHaveLength(5000);
+  const path = '/tastings/' + tasting.id;
+  await rejected(path, { version: tasting.version, overallRating: 6 }, 'overallRating', 'PATCH');
+  await rejected(path, { version: tasting.version, overallRating: 5, comment: ' '.repeat(5001) }, 'comment', 'PATCH');
+  const persisted = await (await page.request.get('/api/v1' + path)).json();
+  expect(persisted).toEqual(tasting);
+  const unchanged = await (await page.request.get('/api/v1/bags?q=' + encodeURIComponent(name))).json();
+  expect(unchanged).toHaveLength(1);
+  expect(unchanged[0].tasting_count).toBe(1);
+  expect(await (await page.request.get('/api/v1/lots')).json()).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ name: 'Rejected ' + name })]),
+  );
+}

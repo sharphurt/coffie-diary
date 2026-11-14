@@ -799,6 +799,7 @@ export function App() {
                       <input
                         name="massG"
                         type="number"
+                        step="any"
                         min={1}
                         max={5000}
                         defaultValue={250}

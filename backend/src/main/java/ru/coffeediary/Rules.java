@@ -19,8 +19,11 @@ public final class Rules {
 
   public static String text(Map<String, Object> m, String key, int max, boolean required) {
     Object v = m.get(key);
-    String s = v == null ? null : v.toString().trim();
-    if ((required && (s == null || s.isEmpty())) || (s != null && s.length() > max))
+    if ((v != null && !(v instanceof String))
+        || (v instanceof String raw && raw.length() > max))
+      throw new Invalid(key, "Проверьте поле: " + key);
+    String s = v == null ? null : ((String) v).trim();
+    if (required && (s == null || s.isEmpty()))
       throw new Invalid(key, "Проверьте поле: " + key);
     return s;
   }

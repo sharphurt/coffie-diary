@@ -140,13 +140,65 @@ test('diary: create, consume, rate, history, restore, statuses and logout', asyn
   await page.getByRole('button', { name: /Сейчас/ }).click();
   await expect(card).toHaveCount(1);
 
+  await test.step('AC-15/19 cup totals and atomic tasting submission', async () => {
+    const bag = purchases.find((row: { id: string }) => row.id !== prior.id);
+    const before = await totals(page);
+    await card.getByRole('button', { name: 'Оценить', exact: true }).click();
+    const flag = page.getByLabel('Также учесть выпитую чашку');
+    await expect(flag).not.toBeChecked();
+    await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('4');
+    await save(page);
+    expect(await totals(page)).toEqual(before);
+
+    await card.getByRole('button', { name: 'Оценить', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('5');
+    await flag.check();
+    const submission = page.waitForRequest(request =>
+      request.method() === 'POST' && request.url().endsWith('/api/v1/tastings'));
+    await save(page);
+    const request = await submission;
+    const response = await request.response();
+    expect(response?.ok()).toBeTruthy();
+    const tasting = await response!.json();
+    expect(request.postDataJSON()).toMatchObject({ bagId: bag.id, recordConsumption: true });
+    const combined = { cups: before.cups + 1, volume: before.volume + 250 };
+    expect(await totals(page)).toMatchObject(combined);
+    await expect(page.locator('.numbers')).toHaveText(new RegExp(`${combined.cups}\\s*чашек\\s*${combined.volume}\\s*мл`));
+
+    const headers = { [csrf.headerName]: csrf.token, 'Idempotency-Key': request.headers()['idempotency-key'] };
+    const retry = await page.request.post('/api/v1/tastings', { headers, data: request.postDataJSON() });
+    expect(retry.ok()).toBeTruthy();
+    expect((await retry.json()).id).toBe(tasting.id);
+    const events = await (await page.request.get('/api/v1/consumptions')).json();
+    expect(events.filter((event: { tasting_id: string }) => event.tasting_id === tasting.id))
+      .toEqual([expect.objectContaining({ bag_id: bag.id, volume_ml: 250 })]);
+    expect(await totals(page)).toMatchObject(combined);
+
+    const list = async () => (await page.request.get('/api/v1/tastings')).json();
+    const saved = await list();
+    const rejected = await page.request.post('/api/v1/tastings', {
+      headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() },
+      data: { bagId: bag.id, overallRating: 5, recordConsumption: true, volumeMl: 0 },
+    });
+    expect(rejected.status()).toBe(422);
+    expect(await rejected.json()).toMatchObject({ fieldErrors: { volumeMl: expect.any(String) } });
+    expect(await list()).toEqual(saved);
+    expect(await (await page.request.get('/api/v1/consumptions')).json()).toEqual(events);
+
+    if (process.env.E2E_FRESH_DATABASE === 'true' && info.project.name === 'desktop') {
+      expect(await totals(page)).toMatchObject({ cups: 3, volume: 700 });
+      expect(events.map((event: { volume_ml: number }) => event.volume_ml).sort((a: number, b: number) => a - b))
+        .toEqual([200, 250, 250]);
+    }
+  });
+
   await page.getByRole('button', { name: /Выпил другой кофе/ }).click();
   await page.getByLabel('Объём напитка, мл').fill('200');
   await page.getByLabel('Что пили?').fill(name + ' неизвестный');
   await save(page);
   const final = await totals(page);
-  expect(final.cups).toBe(initial.cups + 2);
-  expect(final.volume).toBe(initial.volume + 450);
+  expect(final.cups).toBe(initial.cups + 3);
+  expect(final.volume).toBe(initial.volume + 700);
   await page.reload();
   await expect(page.locator('.numbers')).toContainText(String(final.volume));
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();

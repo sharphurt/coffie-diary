@@ -18,7 +18,7 @@
 | AC-04 | PASS | Smoke: повторная покупка создаёт новый id и сохраняет lot_id. |
 | AC-05 | PASS | Smoke: overallRating=4, все сенсорные ответы UNANSWERED/null. |
 | AC-06 | PASS | Desktop/mobile E2E проверяет RATED, UNKNOWN и UNANSWERED после повторного открытия оценки. JUnit отклоняет RATED без числа. |
-| AC-07 | FAIL | Сводки сенсорных средних не реализованы. |
+| AC-07 | PASS | Desktop/mobile E2E: кислотность 2 и 4 даёт среднее 3 при n=2, сладость считается по своему n. Пропуск и UNKNOWN исключены. Удаление оценки обновляет сводку. |
 | AC-08 | FAIL | Диапазоны/required sensory проверены JUnit и smoke; полный набор ограничений формы ещё не реализован. |
 | AC-09 | FAIL | Снимок профиля сохраняется, редактирование рецептов и проверка неизменности ещё отсутствуют. |
 | AC-10 | PASS | Smoke: FINISHED→ACTIVE, finished_at очищен, opened_at сохранён. Переходы пишутся в bag_status_event. |

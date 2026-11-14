@@ -263,3 +263,35 @@ test('cup history filters rows and totals by the same local day', async ({ page 
   await page.getByRole('button', { name: 'Сегодня', exact: true }).click();
   await expect(page.getByText(label + ' inside', { exact: true })).toHaveCount(0);
 });
+
+test('sensory averages count only measured values and update after deletion', async ({ page }, info) => {
+  await page.goto('/');
+  await page.getByLabel('Пароль', { exact: true }).fill(process.env.OWNER_PASSWORD!);
+  await page.getByRole('button', { name: 'Открыть дневник' }).click();
+  await page.getByRole('button', { name: /Добавить кофе/ }).click();
+  const name = `E2E sensory ${info.project.name} ${Date.now()}`;
+  await page.getByLabel('Название кофе').fill(name);
+  await save(page);
+  const card = page.locator('article.card').filter({ hasText: name });
+  for (const [value, comment] of [['2', 'first'], ['4', 'second'], ['', 'skipped'], ['UNKNOWN', 'unknown']]) {
+    await card.getByRole('button', { name: 'Оценить', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Общее впечатление' }).selectOption('4');
+    await page.getByText('Подробнее о вкусе').click();
+    await page.getByRole('combobox', { name: /^Кислотность/ }).selectOption(value);
+    if (comment === 'first') await page.getByRole('combobox', { name: /^Сладость/ }).selectOption('5');
+    await page.getByLabel('Ваши впечатления').fill(name + ' ' + comment);
+    await save(page);
+  }
+  await card.getByText('Сводка вкуса', { exact: true }).click();
+  await expect(card.getByText('Кислотность: 3 из 5 (2 изм.)')).toBeVisible();
+  await expect(card.getByText('Сладость: 5 из 5 (1 изм.)')).toBeVisible();
+  await page.getByRole('button', { name: /История/ }).click();
+  await page.getByRole('button', { name: 'Оценки', exact: true }).click();
+  const first = page.locator('article.history-row').filter({ hasText: name + ' first' });
+  await first.getByRole('button', { name: 'Удалить', exact: true }).click();
+  await expect(first).toHaveCount(0);
+  await page.getByRole('button', { name: /Сейчас/ }).click();
+  await card.getByText('Сводка вкуса', { exact: true }).click();
+  await expect(card.getByText('Кислотность: 4 из 5 (1 изм.)')).toBeVisible();
+  await expect(card.getByText(/Сладость:/)).toHaveCount(0);
+});

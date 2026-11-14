@@ -15,6 +15,22 @@ const day = () =>
   new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Yekaterinburg" }).format(
     new Date(),
   );
+const sensoryNumber = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+
+function SensorySummary({ summary }: { summary?: Record<string, { average: number; count: number }> }) {
+  if (!summary || !Object.keys(summary).length) return null;
+  return (
+    <details>
+      <summary>Сводка вкуса</summary>
+      <ul>
+        {Object.entries(dimensions).map(([key, label]) => {
+          const measurement = summary[key];
+          return measurement && <li key={key}>{label}: {sensoryNumber.format(measurement.average)} из 5 ({measurement.count} изм.)</li>;
+        })}
+      </ul>
+    </details>
+  );
+}
 const format = (v: string) =>
   new Date(v).toLocaleString("ru-RU", {
     timeZone: "Asia/Yekaterinburg",
@@ -427,6 +443,7 @@ export function App() {
                       >
                         Выпил чашку · {profile.default_cup_volume_ml} мл
                       </button>
+                      <SensorySummary summary={b.sensory_summary} />
                       <div className="card-actions">
                         <button
                           onClick={() =>
@@ -567,6 +584,7 @@ export function App() {
                         : r.status || "Личный лот"}
                   </p>
                   {r.comment && <p>{r.comment}</p>}
+                  {kind === "bags" && <SensorySummary summary={r.sensory_summary} />}
                 </div>
                 <div className="row-actions">
                   {kind === "tastings" && !deleted && (

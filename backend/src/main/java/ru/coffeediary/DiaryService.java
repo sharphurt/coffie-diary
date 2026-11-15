@@ -646,9 +646,23 @@ public class DiaryService {
     };
   }
 
+  record CupScope(UUID profileId, UUID bagId, UUID lotId) {
+    String sql() {
+      return (profileId == null ? "" : " and c.profile_snapshot->>'id'=?")
+          + (bagId == null ? "" : " and c.bag_id=?")
+          + (lotId == null ? "" : " and b.lot_id=?");
+    }
+
+    void bind(List<Object> args) {
+      if (profileId != null) args.add(profileId.toString());
+      if (bagId != null) args.add(bagId);
+      if (lotId != null) args.add(lotId);
+    }
+  }
+
   public List<Map<String, Object>> list(UUID owner, String kind, int limit, int offset,
       boolean deleted, String query, LocalDate start, LocalDate end, String status,
-      Integer rating, String coffee, String sort) {
+      Integer rating, String coffee, String sort, CupScope scope) {
     String condition = deleted ? " is not null" : " is null";
     String source = switch (kind) {
       case "lots" -> "select l.*, summary.rating, summary.rated_bags, l.created_at history_date,"
@@ -664,7 +678,7 @@ public class DiaryService {
           + " (b.deleted_at is not null or l.deleted_at is not null) bag_deleted,"
           + " case when b.deleted_at is null and l.deleted_at is null then l.name end bag_name,"
           + " c.consumed_at history_date,c.consumed_at recent,null::numeric rating"
-          + CUP_JOINS + " where c.owner_id=? and c.deleted_at" + condition + cupFilter(coffee);
+          + CUP_JOINS + " where c.owner_id=? and c.deleted_at" + condition + cupFilter(coffee) + scope.sql();
       case "tastings" -> "select t.*,l.name,l.roaster_name,t.tasted_at history_date,t.tasted_at recent,t.overall_rating rating"
           + " from tasting t join coffee_bag b on b.id=t.bag_id and b.owner_id=t.owner_id"
           + " join personal_lot l on l.id=b.lot_id and l.owner_id=b.owner_id"
@@ -695,6 +709,7 @@ public class DiaryService {
     };
     var args = new ArrayList<Object>();
     args.add(owner);
+    if (kind.equals("consumptions")) scope.bind(args);
     args.add(search(query));
     args.add(search(query));
     String sql = "select * from (" + source + ") h where (h.name ilike ? escape '!'"
@@ -739,20 +754,20 @@ public class DiaryService {
     return Timestamp.from(date.atStartOfDay(zone).toInstant());
   }
 
-  public Map<String, Object> stats(UUID owner, LocalDate start, LocalDate end, String query, String coffee) {
+  public Map<String, Object> stats(UUID owner, LocalDate start, LocalDate end, String query, String coffee,
+      CupScope scope) {
     validatePeriod(start, end);
     ZoneId zone = ownerZone(owner);
+    var args = new ArrayList<Object>(List.of(zone.getId(), owner, midnight(start, zone),
+        midnight(end.plusDays(1), zone), search(query), search(query), search(query)));
+    scope.bind(args);
     var points =
         rows(
             "select (consumed_at at time zone ?)::date as local_day,count(*) cups,sum(c.volume_ml)"
                 + " volume" + CUP_JOINS + " where c.owner_id=? and c.deleted_at is null and"
                 + " c.consumed_at>=? and c.consumed_at<?" + cupFilter(coffee)
                 + " and (coalesce(l.name,c.coffee_label) ilike ? escape '!' or l.roaster_name ilike ? escape '!' or ? = '%%')"
-                + " group by local_day order by local_day",
-            zone.getId(),
-            owner,
-            midnight(start, zone),
-            midnight(end.plusDays(1), zone), search(query), search(query), search(query));
+                + scope.sql() + " group by local_day order by local_day", args.toArray());
     var days = new ArrayList<Map<String, Object>>();
     long count = 0, volume = 0;
     for (LocalDate d = start; !d.isAfter(end); d = d.plusDays(1)) {

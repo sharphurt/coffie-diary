@@ -175,6 +175,7 @@ export function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [query, setQuery] = useState(""),
+    [cupScope, setCupScope] = useState({ profileId: "", bagId: "", lotId: "" }),
     [historyStatus, setHistoryStatus] = useState(""),
     [historyRating, setHistoryRating] = useState(""),
     [coffee, setCoffee] = useState(""),
@@ -184,6 +185,18 @@ export function App() {
     [deleted, setDeleted] = useState(false),
     [offset, setOffset] = useState(0);
   const refreshId = useRef(0);
+  const [statisticsLots, setStatisticsLots] = useState<Row[]>([]);
+  function currentPeriod(period: "week" | "month") {
+    const today = day();
+    const date = new Date(today + "T00:00:00Z");
+    if (period === "week") date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
+    else date.setUTCDate(1);
+    setStart(date.toISOString().slice(0, 10));
+    if (period === "week") date.setUTCDate(date.getUTCDate() + 6);
+    else date.setUTCMonth(date.getUTCMonth() + 1, 0);
+    setEnd(date.toISOString().slice(0, 10));
+    setOffset(0);
+  }
   async function refresh() {
     const id = ++refreshId.current;
     const cupHistory = page === "История" && kind === "consumptions";
@@ -194,7 +207,8 @@ export function App() {
     if (kind === "bags" && historyStatus) filters.set("status", historyStatus);
     if (kind !== "consumptions" && historyRating) filters.set("rating", historyRating);
     if (cupHistory && coffee) filters.set("coffee", coffee);
-    const [b, p, s, rows, equipment] = await Promise.all([
+    if (cupHistory) Object.entries(cupScope).forEach(([key, value]) => { if (value) filters.set(key, value); });
+    const [b, p, s, rows, equipment, lots] = await Promise.all([
       api("/bags?limit=100"),
       api("/profile"),
       page === "Сейчас" || (cupHistory && validPeriod && !deleted)
@@ -204,11 +218,13 @@ export function App() {
         ? api(`/${kind}?deleted=${deleted}&offset=${offset}&limit=21&${filters}&${period}`)
         : [],
       api("/brew-profiles"),
+      cupHistory ? api("/lots?limit=100") : [],
     ]);
     if (id !== refreshId.current) return;
     setBags(b);
     setProfile(p);
     setProfiles(equipment);
+    setStatisticsLots(lots);
     if (s) setStats(s);
     setHistory(rows);
   }
@@ -220,7 +236,7 @@ export function App() {
   }, []);
   useEffect(() => {
     if (user) refresh().catch((e) => setError(e.message));
-  }, [user, page, kind, query, start, end, deleted, offset, historyStatus, historyRating, coffee, historySort]);
+  }, [user, page, kind, query, start, end, deleted, offset, historyStatus, historyRating, coffee, historySort, cupScope]);
   useEffect(() => {
     const f = (e: BeforeUnloadEvent) => {
       if (modal) {
@@ -737,8 +753,27 @@ export function App() {
                 />
               </label>
               <button onClick={() => { const today = day(); setStart(today); setEnd(today); setOffset(0); }}>Сегодня</button>
+              {kind === "consumptions" && <>
+                <button onClick={() => currentPeriod("week")}>Текущая неделя</button>
+                <button onClick={() => currentPeriod("month")}>Текущий месяц</button>
+                {([
+                  ["profileId", "Профиль статистики", profiles],
+                  ["bagId", "Пачка статистики", bags],
+                  ["lotId", "Лот статистики", statisticsLots],
+                ] as const).map(([key, label, options]) => (
+                  <label key={key}>{label}
+                    <select value={cupScope[key]} onChange={e => {
+                      setCupScope({ ...cupScope, [key]: e.target.value }); setOffset(0);
+                    }}>
+                      <option value="">Все</option>
+                      {options.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </>}
               <button onClick={() => {
                 setQuery(""); setHistoryStatus(""); setHistoryRating(""); setCoffee("");
+                setCupScope({ profileId: "", bagId: "", lotId: "" });
                 setHistorySort("recent"); setDeleted(false); setOffset(0);
                 setStart(kind === "consumptions" ? day() : "");
                 setEnd(kind === "consumptions" ? day() : "");
@@ -747,6 +782,17 @@ export function App() {
                 {stats.cups} чашек · {stats.volume} мл за период
               </b>}
             </div>
+            {kind === "consumptions" && !deleted && start && end && start <= end && stats.days?.length > 0 && (
+              <details>
+                <summary>Итоги по дням</summary>
+                <table>
+                  <thead><tr><th>Дата</th><th>Чашки</th><th>Объём, мл</th></tr></thead>
+                  <tbody>{stats.days.map((point: Row) => (
+                    <tr key={point.day}><td>{point.day}</td><td>{point.cups}</td><td>{point.volume}</td></tr>
+                  ))}</tbody>
+                </table>
+              </details>
+            )}
             <div className="tabs">
               {[
                 ["consumptions", "Выпито"],

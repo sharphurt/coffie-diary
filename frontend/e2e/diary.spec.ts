@@ -480,12 +480,38 @@ test('cup history filters rows and totals by the same local day', async ({ page 
   await expect(page.getByText('2 чашек · 450 мл за период')).toBeVisible();
   await coffee.selectOption('known');
   await expect(page.getByText('1 чашек · 250 мл за период')).toBeVisible();
-  await expect(page.getByText(label + ' known', { exact: true })).toBeVisible();
+  await expect(page.locator('article.history-row').getByText(label + ' known', { exact: true })).toBeVisible();
   await expect(page.getByText(label + ' unknown', { exact: true })).toHaveCount(0);
   await coffee.selectOption('unknown');
   await expect(page.getByText('1 чашек · 200 мл за период')).toBeVisible();
   await expect(page.getByText(label + ' unknown', { exact: true })).toBeVisible();
-  await expect(page.getByText(label + ' known', { exact: true })).toHaveCount(0);
+  await expect(page.locator('article.history-row').getByText(label + ' known', { exact: true })).toHaveCount(0);
+  await coffee.selectOption('');
+  const savedProfile = await (await page.request.get('/api/v1/profile')).json();
+  for (const [name, id] of [
+    ['Пачка статистики', bag.id], ['Лот статистики', bag.lot_id],
+  ]) {
+    const selector = page.getByRole('combobox', { name, exact: true });
+    await selector.selectOption(id);
+    await expect(page.getByText('1 чашек · 250 мл за период')).toBeVisible();
+    await expect(page.getByText(label + ' unknown', { exact: true })).toHaveCount(0);
+    await selector.selectOption('');
+  }
+  const byProfile = await page.request.get(
+    '/api/v1/consumption-stats?start=2020-01-01&end=2020-01-03&q='
+    + encodeURIComponent(label + ' unknown') + '&profileId=' + savedProfile.id,
+  );
+  expect(byProfile.ok()).toBeTruthy();
+  expect(await byProfile.json()).toMatchObject({ cups: 1, volume: 200, days: [
+    { day: '2020-01-01', cups: 0, volume: 0 },
+    { day: '2020-01-02', cups: 1, volume: 200 },
+    { day: '2020-01-03', cups: 0, volume: 0 },
+  ] });
+  await page.getByRole('button', { name: 'Текущая неделя' }).click();
+  const weekStart = await page.getByLabel('С', { exact: true }).inputValue();
+  expect(new Date(weekStart).getUTCDay()).toBe(1);
+  await page.getByRole('button', { name: 'Текущий месяц' }).click();
+  await expect(page.getByLabel('С', { exact: true })).toHaveValue(/^\d{4}-\d{2}-01$/);
   await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
   await expect(coffee).toHaveValue('');
   await expect(page.getByLabel('Поиск по названию или обжарщику')).toHaveValue('');

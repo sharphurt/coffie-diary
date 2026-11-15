@@ -116,8 +116,11 @@ public class Api {
       @RequestParam(required = false) String status,
       @RequestParam(required = false) Integer rating,
       @RequestParam(required = false) String coffee,
-      @RequestParam(required = false) String sort) {
-    return service.list(owner(p), kind, limit, offset, deleted, q, start, end, status, rating, coffee, sort);
+      @RequestParam(required = false) String sort,
+      @RequestParam(required = false) UUID profileId, @RequestParam(required = false) UUID bagId,
+      @RequestParam(required = false) UUID lotId) {
+    return service.list(owner(p), kind, limit, offset, deleted, q, start, end, status, rating, coffee, sort,
+        new DiaryService.CupScope(profileId, bagId, lotId));
   }
 
   @GetMapping("/{kind:bags|lots|tastings|consumptions}/{id}")
@@ -212,8 +215,10 @@ public class Api {
 
   @GetMapping("/consumption-stats")
   public Object stats(Principal p, @RequestParam LocalDate start, @RequestParam LocalDate end,
-      @RequestParam(defaultValue = "") String q, @RequestParam(required = false) String coffee) {
-    return service.stats(owner(p), start, end, q, coffee);
+      @RequestParam(defaultValue = "") String q, @RequestParam(required = false) String coffee,
+      @RequestParam(required = false) UUID profileId, @RequestParam(required = false) UUID bagId,
+      @RequestParam(required = false) UUID lotId) {
+    return service.stats(owner(p), start, end, q, coffee, new DiaryService.CupScope(profileId, bagId, lotId));
   }
 
   @GetMapping("/catalog/sources")

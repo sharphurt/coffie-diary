@@ -165,3 +165,66 @@ async function getAsOwner(path) {
 assert.deepEqual(await getAsOwner(cupPath(ownerCup)), ownerCup);
 assert.deepEqual(await getAsOwner('/tastings/' + ownerFreeRating.id), ownerFreeRating);
 console.log('PASS: neither owner can attach the other owner’s tasting');
+
+function asOwner(session, token) {
+  return (path, method = 'GET', data) => fetch(base + path, {
+    method,
+    headers: { Cookie: session, [token.headerName]: token.token,
+      'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: data === undefined ? undefined : JSON.stringify(data),
+  });
+}
+const asFirst = asOwner(ownerSession, raceToken);
+const asSecond = asOwner(guestSession, guestToken);
+async function read(call, path) {
+  const response = await call(path);
+  assert.equal(response.status, 200, path);
+  return response.json();
+}
+
+const firstBag = await read(asFirst, '/bags/' + bagId);
+const secondBag = await read(asSecond, '/bags/' + state.ownBag);
+const records = [
+  ['lots', await read(asFirst, '/lots/' + firstBag.lot_id), await read(asSecond, '/lots/' + secondBag.lot_id),
+    suffix => ({ name: 'AC-40 lot ' + suffix, roasterName: 'Roaster ' + suffix }), row => [row.name, row.roaster_name]],
+  ['bags', firstBag, secondBag,
+    suffix => ({ massG: 300 + suffix, note: 'AC-40 bag ' + suffix }), row => [Number(row.mass_g), row.note]],
+  ['consumptions', ownerCup, guestCup,
+    suffix => ({ volumeMl: 200 + suffix, comment: 'AC-40 cup ' + suffix }), row => [row.volume_ml, row.comment]],
+];
+for (const [kind, first, second, edits, changedFields] of records) {
+  for (const [home, foreign, own, other] of [[asFirst, asSecond, first, second], [asSecond, asFirst, second, first]]) {
+    const list = await read(home, '/' + kind + '?limit=100');
+    assert.ok(list.some(row => row.id === own.id), kind + ' own record missing from list');
+    assert.ok(list.every(row => row.owner_id === own.owner_id), kind + ' list leaked another owner');
+    assert.ok(!list.some(row => row.id === other.id));
+    const path = '/' + kind + '/' + own.id;
+    for (const [method, endpoint, body] of [
+      ['GET', path],
+      ['PATCH', path, { version: own.version, ...edits(0) }],
+      ['DELETE', path + '?version=' + own.version],
+      ['POST', path + '/restore', { version: own.version }],
+    ]) {
+      assert.equal((await foreign(endpoint, method, body)).status, 404, method + ' other owner ' + kind);
+    }
+    assert.deepEqual(await read(home, path), own);
+  }
+  const path = '/' + kind + '/' + first.id;
+  const updates = [edits(1), edits(2)];
+  const responses = await Promise.all(updates.map(data => asFirst(path, 'PATCH', { version: first.version, ...data })));
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 409], kind);
+  const winner = responses.findIndex(response => response.ok);
+  const updated = await responses[winner].json();
+  assert.deepEqual(changedFields(updated), Object.values(updates[winner]), kind + ' winner fields');
+  assert.equal(updated.version, first.version + 1);
+  assert.deepEqual(await read(asFirst, path), updated, kind + ' stale request altered the winner');
+}
+assert.equal((await asSecond('/bags', 'POST', { lotId: firstBag.lot_id })).status, 404);
+assert.equal((await asSecond('/consumptions', 'POST', {
+  bagId: firstBag.id, volumeMl: 180, clientEventId: crypto.randomUUID(),
+})).status, 404);
+assert.equal((await asSecond(cupPath(guestCup), 'PATCH', {
+  bagId: firstBag.id, version: guestCup.version,
+})).status, 404);
+assert.deepEqual(await read(asSecond, cupPath(guestCup)), guestCup);
+console.log('PASS: lot, bag and cup isolation and concurrent version conflicts');

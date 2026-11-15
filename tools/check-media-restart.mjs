@@ -228,3 +228,39 @@ assert.equal((await asSecond(cupPath(guestCup), 'PATCH', {
 })).status, 404);
 assert.deepEqual(await read(asSecond, cupPath(guestCup)), guestCup);
 console.log('PASS: lot, bag and cup isolation and concurrent version conflicts');
+
+if (process.env.E2E_LIVE_CATALOG === 'true') {
+  for (const source of ['FOLK', 'TASTY']) {
+    const start = await asFirst('/catalog/sources/' + source + '/sync', 'POST');
+    assert.equal(start.status, 202);
+    const { runId } = await start.json();
+    let run;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      run = await read(asFirst, '/catalog/import-runs/' + runId);
+      if (run.status !== 'RUNNING') break;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    assert.equal(run.status, 'PARTIAL', source + ': ' + JSON.stringify(run));
+    assert.ok(run.product_count > 0);
+    const products = await read(asFirst, '/catalog/products');
+    const product = products.find(item => item.source_code === source);
+    assert.ok(product);
+    const resolved = await asFirst('/catalog/resolve-url', 'POST', { url: product.url });
+    assert.equal(resolved.status, 200);
+    assert.equal((await resolved.json()).id, product.id);
+    const path = '/lots/' + firstBag.lot_id;
+    const original = await read(asFirst, path);
+    assert.equal(original.catalog_product_id, null);
+    const confirmed = await asFirst(path + '/catalog-link', 'PUT', {
+      productId: product.id, version: original.version,
+    });
+    assert.equal(confirmed.status, 200);
+    assert.equal((await read(asFirst, path)).catalog_product_id, product.id);
+    assert.equal((await asSecond(path + '/catalog-link', 'PUT', {
+      productId: product.id, version: original.version + 1,
+    })).status, 404);
+    assert.equal((await asFirst(path + '/catalog-link?version=' + (original.version + 1), 'DELETE')).status, 200);
+    assert.equal((await read(asFirst, path)).catalog_product_id, null);
+    console.log('PASS: live ' + source + ' partial import (' + run.product_count + ') and confirmed lot link');
+  }
+}

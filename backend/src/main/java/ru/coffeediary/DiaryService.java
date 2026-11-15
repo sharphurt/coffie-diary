@@ -154,6 +154,14 @@ public class DiaryService {
   }
 
   @Transactional
+  public Map<String, Object> linkCatalog(UUID owner, UUID id, UUID product, Map<String, Object> in) {
+    editable("personal_lot", owner, id, in);
+    db.update("update personal_lot set catalog_product_id=?, version=version+1, updated_at=now()"
+        + " where id=? and owner_id=?", product, id, owner);
+    return row("personal_lot", id, owner);
+  }
+
+  @Transactional
   public Map<String, Object> editLot(UUID owner, UUID id, Map<String, Object> in) {
     var old = editable("personal_lot", owner, id, in);
     db.update("update personal_lot set name=?,roaster_name=?,updated_at=now(),version=version+1"

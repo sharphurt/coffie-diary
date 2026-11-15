@@ -14,10 +14,12 @@ import org.springframework.web.server.ResponseStatusException;
 public class Api {
   final DiaryService service;
   final MediaService media;
+  final CatalogService catalogs;
 
-  public Api(DiaryService service, MediaService media) {
+  public Api(DiaryService service, MediaService media, CatalogService catalogs) {
     this.service = service;
     this.media = media;
+    this.catalogs = catalogs;
   }
 
   UUID owner(Principal p) {
@@ -223,14 +225,45 @@ public class Api {
 
   @GetMapping("/catalog/sources")
   public Object sources() {
-    return List.of(
-        Map.of("code", "FOLK", "status", "NEVER_SYNCED", "reviewsStatus", "UNKNOWN"),
-        Map.of("code", "TASTY", "status", "NEVER_SYNCED", "reviewsStatus", "UNKNOWN"));
+    return catalogs.sources();
   }
 
   @GetMapping("/catalog/products")
-  public Object catalog() {
-    return List.of();
+  public Object catalog(@RequestParam(defaultValue = "") String q) {
+    return catalogs.products(q);
+  }
+
+  @GetMapping("/catalog/products/{id}")
+  public Object catalogProduct(@PathVariable UUID id) {
+    return catalogs.product(id);
+  }
+
+  @PostMapping("/catalog/sources/{code}/sync")
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Object syncCatalog(@PathVariable String code) {
+    return Map.of("runId", catalogs.start(code));
+  }
+
+  @GetMapping("/catalog/import-runs/{id}")
+  public Object importRun(@PathVariable UUID id) {
+    return catalogs.run(id);
+  }
+
+  @PostMapping("/catalog/resolve-url")
+  public Object resolveCatalog(@RequestBody Map<String, Object> input) {
+    return catalogs.resolve(Rules.text(input, "url", 1500, true));
+  }
+
+  @PutMapping("/lots/{id}/catalog-link")
+  public Object linkCatalog(Principal p, @PathVariable UUID id, @RequestBody Map<String, Object> input) {
+    UUID productId = service.uuid(input.get("productId"));
+    catalogs.product(productId);
+    return service.linkCatalog(owner(p), id, productId, input);
+  }
+
+  @DeleteMapping("/lots/{id}/catalog-link")
+  public Object unlinkCatalog(Principal p, @PathVariable UUID id, @RequestParam long version) {
+    return service.linkCatalog(owner(p), id, null, Map.of("version", version));
   }
 
   @GetMapping("/recommendations")

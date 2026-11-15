@@ -77,6 +77,39 @@ function RecipeFields({ recipe, title = "Обычный рецепт" }: { recip
   );
 }
 
+function CatalogPanel() {
+  const [sources, setSources] = useState<Row[]>([]);
+  const [products, setProducts] = useState<Row[]>([]);
+  const [error, setError] = useState("");
+  async function load() {
+    const [status, items] = await Promise.all([api("/catalog/sources"), api("/catalog/products")]);
+    setSources(status);
+    setProducts(items);
+  }
+  useEffect(() => {
+    const refresh = () => void load().catch(failure => setError(failure.message));
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <section>
+    <h2>Каталоги магазинов</h2>
+    {sources.map(source => <p key={source.code}>
+      {source.code} · {({ NEVER_SYNCED: "Не загружен", RUNNING: "Импортируется",
+        PARTIAL: "Загружен частично", FAILED: "Ошибка импорта" } as Row)[source.status]}
+      {" "}<button disabled={source.status === "RUNNING"} onClick={async () => {
+        setError("");
+        try { await api(`/catalog/sources/${source.code}/sync`, "POST"); await load(); }
+        catch (failure) { setError((failure as Error).message); }
+      }}>Обновить {source.code}</button>
+    </p>)}
+    {error && <p role="alert">{error}</p>}
+    <ul>{products.map(product => <li key={product.id}>
+      <a href={product.url} target="_blank" rel="noreferrer">{product.name}</a> · {product.source_code}
+    </li>)}</ul>
+  </section>;
+}
+
 function BagPhotos({ bag, committed }: { bag: Row; committed: () => Promise<void> }) {
   const [ids, setIds] = useState<string[]>(bag.photos?.ids ?? []);
   const [busy, setBusy] = useState(false);
@@ -316,6 +349,10 @@ export function App() {
       if (m.type === "linkTasting")
         await api(`/consumptions/${m.event.id}/tasting-link`, "PUT", {
           tastingId: v.tastingId, version: m.event.version,
+        });
+      if (m.type === "catalogLink")
+        await api(`/lots/${m.record.id}/catalog-link`, "PUT", {
+          version: m.record.version, productId: m.candidate.id,
         });
       if (m.type === "finalImpression")
         await api(`/bags/${m.record.id}/final-impression`, "PUT", {
@@ -867,6 +904,9 @@ export function App() {
                   {kind === "lots" && !deleted && (
                     <>
                       <button disabled={busy} onClick={() => open("lot", { record: r })}>Изменить лот</button>
+                      <button disabled={busy} onClick={() => open("catalogLink", { record: r })}>Связать с товаром</button>
+                      {r.catalog_product_id && <button disabled={busy} onClick={() => run(() =>
+                        api(`/lots/${r.id}/catalog-link?version=${r.version}`, "DELETE"))}>Снять связь с каталогом</button>}
                       <button disabled={busy} onClick={() => open("bag", { lotId: r.id, name: r.name })}>Добавить пачку</button>
                     </>
                   )}
@@ -976,19 +1016,7 @@ export function App() {
           </>
         )}
         {page === "Что попробовать" && (
-          <div className="empty">
-            <span>✧</span>
-            <h2>Новые открытия впереди</h2>
-            <p>
-              Каталог ещё не загружен.
-              <br />
-              Интеграции FOLK и Tasty Coffee находятся в разработке.
-            </p>
-            <p className="muted">
-              Личные рекомендации появятся после импорта
-              <br />и привязки оценённых покупок к каталогу.
-            </p>
-          </div>
+          <CatalogPanel />
         )}
         {page === "Настройки" && (
           <section className="settings">
@@ -1098,7 +1126,8 @@ export function App() {
             </button>
             <p className="eyebrow">МОЙ КОФЕ</p>
             <h2 id="dialog-title">
-              {modal.type === "finalImpression" ? "Итоговое впечатление о пачке"
+              {modal.type === "catalogLink" ? "Связать лот с товаром"
+                : modal.type === "finalImpression" ? "Итоговое впечатление о пачке"
                 : modal.type === "linkTasting" ? "Привязать оценку"
                 : modal.type === "photos" ? "Фото пачки"
                 : modal.type === "lot" ? (modal.record ? "Изменить лот" : "Новый лот")
@@ -1114,6 +1143,21 @@ export function App() {
               await refresh();
               setModal(null);
             }} /> : <form onSubmit={save}>
+              {modal.type === "catalogLink" && <>
+                <label>Ссылка на товар
+                  <input type="url" value={modal.catalogUrl ?? ""} onChange={e =>
+                    setModal({ ...modal, catalogUrl: e.target.value, candidate: null })} />
+                </label>
+                <button type="button" disabled={busy || !modal.catalogUrl} onClick={async () => {
+                  setError("");
+                  try {
+                    const candidate = await api("/catalog/resolve-url", "POST", { url: modal.catalogUrl });
+                    setModal(current => current?.key === modal.key && current?.catalogUrl === modal.catalogUrl
+                      ? { ...current, candidate } : current);
+                  } catch (failure) { setError((failure as Error).message); }
+                }}>Найти товар</button>
+                {modal.candidate && <p>{modal.candidate.name} · {modal.candidate.source_code}</p>}
+              </>}
               {modal.type === "finalImpression" && <>
                 <label>Итоговая оценка пачки
                   <select name="finalRating" defaultValue={modal.record.final_rating ?? ""}>
@@ -1429,7 +1473,8 @@ export function App() {
                   {error}
                 </p>
               )}
-              <button className="primary wide" disabled={busy || (modal.type === "linkTasting" && !modal.ratings.length)}>
+              <button className="primary wide" disabled={busy || (modal.type === "linkTasting" && !modal.ratings.length)
+                || (modal.type === "catalogLink" && !modal.candidate)}>
                 {busy ? "Сохраняем…" : "Сохранить"}
               </button>
             </form>}

@@ -265,5 +265,35 @@ if (process.env.E2E_LIVE_CATALOG === 'true') {
     assert.equal((await asFirst(path + '/catalog-link?version=' + (original.version + 1), 'DELETE')).status, 200);
     assert.equal((await read(asFirst, path)).catalog_product_id, null);
     console.log('PASS: live ' + source + ' partial import (' + run.product_count + ') and confirmed lot link');
+    if (source === 'TASTY') {
+      const url = 'https://shop.tastycoffee.ru/coffee/braziliya-sul-de-minas';
+      const targetResponse = await asFirst('/catalog/resolve-url', 'POST', { url });
+      assert.equal(targetResponse.status, 200);
+      const target = await targetResponse.json();
+      const { importTastyReviews } = await import('./import-tasty-reviews.mjs');
+      const path = '/catalog/products/' + target.id + '/reviews';
+      const submit = async (_, batch) => {
+        const response = await asFirst(path + '/import', 'POST', batch);
+        assert.equal(response.status, 200);
+        return response.json();
+      };
+      let captured;
+      const imported = await importTastyReviews(target, (id, batch) => {
+        captured = batch;
+        return submit(id, batch);
+      });
+      assert.equal(imported.status, 'AVAILABLE');
+      assert.ok(imported.items.length > 0);
+      assert.ok(imported.items.every(item => item.source_url === url && item.body));
+      assert.deepEqual(await submit(target.id, captured), imported);
+      assert.equal((await asFirst(path + '/import', 'POST', {
+        ...captured, url: 'https://shop.tastycoffee.ru/coffee/wrong-product',
+      })).status, 422);
+      assert.deepEqual(await submit(target.id, { url, texts: [] }), {
+        status: 'UNAVAILABLE', items: imported.items,
+      });
+      assert.deepEqual(await read(asFirst, path), { status: 'UNAVAILABLE', items: imported.items });
+      console.log('PASS: live Tasty reviews linked, repeated batch deduplicated and unavailable batch preserved reviews');
+    }
   }
 }

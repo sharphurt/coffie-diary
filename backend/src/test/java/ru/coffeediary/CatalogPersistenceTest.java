@@ -15,6 +15,34 @@ import org.springframework.transaction.support.TransactionTemplate;
 @EnabledIfEnvironmentVariable(named = "E2E_CATALOG_DATABASE", matches = "true")
 class CatalogPersistenceTest {
   @Test
+  void reviewImportDeduplicatesAndPreservesLastSuccessfulTexts() {
+    var datasource = new DriverManagerDataSource(System.getenv("DATABASE_URL"),
+        System.getenv("POSTGRES_USER"), System.getenv("POSTGRES_PASSWORD"));
+    var db = new JdbcTemplate(datasource);
+    var service = new CatalogService(db, new TransactionTemplate(new DataSourceTransactionManager(datasource)),
+        Runnable::run);
+    UUID id = UUID.randomUUID();
+    String url = "https://shop.tastycoffee.ru/coffee/test-" + id;
+    db.update("insert into catalog_product(id,source_code,url,name) values(?,'TASTY',?,?)",
+        id, url, "Синтетический тест отзывов");
+    try {
+      assertEquals(Map.of("status", "UNKNOWN", "items", List.of()), service.reviews(id));
+      Object first = service.importReviews(id, new CatalogService.ReviewImport(url, List.of("Тестовый  отзыв")));
+      assertEquals(first, service.importReviews(id, new CatalogService.ReviewImport(url, List.of("Тестовый отзыв"))));
+      assertEquals(1, db.queryForObject("select count(*) from external_review where product_id=?",
+          Integer.class, id));
+      assertThrows(Rules.Invalid.class, () -> service.importReviews(id,
+          new CatalogService.ReviewImport("https://shop.tastycoffee.ru/coffee/another", List.of("Другой текст"))));
+      var unavailable = (Map<?, ?>) service.importReviews(id, new CatalogService.ReviewImport(url, List.of()));
+      assertEquals("UNAVAILABLE", unavailable.get("status"));
+      assertEquals(((Map<?, ?>) first).get("items"), unavailable.get("items"));
+    } finally {
+      db.update("delete from external_review where product_id=?", id);
+      db.update("delete from catalog_product where id=?", id);
+    }
+  }
+
+  @Test
   void repeatChangeAndFailedRunsPreserveCatalogAndImmutableSnapshots() {
     var datasource = new DriverManagerDataSource(System.getenv("DATABASE_URL"),
         System.getenv("POSTGRES_USER"), System.getenv("POSTGRES_PASSWORD"));

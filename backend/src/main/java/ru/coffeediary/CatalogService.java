@@ -27,13 +27,55 @@ class CatalogService {
 
   Object sources() {
     return db.queryForList("""
-        select s.code, coalesce(r.status, 'NEVER_SYNCED') status, 'UNKNOWN' "reviewsStatus",
+        select s.code, coalesce(r.status, 'NEVER_SYNCED') status,
+               coalesce(reviews.status,'UNKNOWN') "reviewsStatus",
                r.started_at, r.finished_at, r.product_count
         from (values ('FOLK'), ('TASTY')) s(code)
         left join lateral (
           select * from catalog_import_run where source_code=s.code order by started_at desc limit 1
-        ) r on true order by s.code
+        ) r on true left join lateral (
+          select case when bool_or(p.reviews_status='AVAILABLE') then 'AVAILABLE'
+            when bool_or(p.reviews_status='UNAVAILABLE') then 'UNAVAILABLE' end status
+          from catalog_product p where p.source_code=s.code
+        ) reviews on true order by s.code
         """);
+  }
+
+  record ReviewImport(String url, List<String> texts) {}
+
+  Object importReviews(UUID id, ReviewImport input) {
+    if (input.texts() == null || input.texts().size() > 50)
+      throw new Rules.Invalid("texts", "Передайте до 50 отзывов");
+    String url = CatalogAdapters.productUrl("TASTY", input.url());
+    transaction.executeWithoutResult(status -> {
+      var rows = db.queryForList("select url from catalog_product where id=? and source_code='TASTY' for update", id);
+      if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+      if (!url.equals(rows.getFirst().get("url")))
+        throw new Rules.Invalid("url", "Ссылка не соответствует товару");
+      for (String text : input.texts()) {
+        if (text == null || text.isBlank() || text.length() > 8000)
+          throw new Rules.Invalid("texts", "Некорректный текст отзыва");
+        String normalized = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFC)
+            .replaceAll("(?U)\\s+", " ").strip();
+        db.update("""
+            insert into external_review(product_id,content_hash,body,source_url)
+            values(?,encode(sha256(convert_to(?, 'UTF8')), 'hex'),?,?)
+            on conflict (product_id,content_hash) do nothing
+            """, id, normalized, normalized, url);
+      }
+      db.update("update catalog_product set reviews_status=? where id=?",
+          input.texts().isEmpty() ? "UNAVAILABLE" : "AVAILABLE", id);
+    });
+    return reviews(id);
+  }
+
+  Object reviews(UUID id) {
+    String status = db.queryForList("select reviews_status from catalog_product where id=?", String.class, id)
+        .stream().findFirst().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    return Map.of("status", status, "items", db.queryForList("""
+        select body,source_url,observed_at from external_review where product_id=?
+        order by observed_at desc,content_hash limit 50
+        """, id));
   }
 
   Object products(String q) {

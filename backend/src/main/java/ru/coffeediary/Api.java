@@ -238,6 +238,16 @@ public class Api {
     return catalogs.product(id);
   }
 
+  @GetMapping("/catalog/products/{id}/reviews")
+  public Object catalogReviews(@PathVariable UUID id) {
+    return catalogs.reviews(id);
+  }
+
+  @PostMapping("/catalog/products/{id}/reviews/import")
+  public Object importCatalogReviews(@PathVariable UUID id, @RequestBody CatalogService.ReviewImport input) {
+    return catalogs.importReviews(id, input);
+  }
+
   @PostMapping("/catalog/sources/{code}/sync")
   @ResponseStatus(HttpStatus.ACCEPTED)
   public Object syncCatalog(@PathVariable String code) {

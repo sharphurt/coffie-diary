@@ -66,7 +66,8 @@ class CatalogService {
   }
 
   private String encodeOffers(List<CatalogAdapters.Offer> offers) {
-    return json.valueToTree(offers).toString();
+    return json.valueToTree(offers.stream()
+        .sorted(Comparator.comparing(CatalogAdapters.Offer::variantId)).toList()).toString();
   }
 
   synchronized UUID start(String source) {
@@ -79,33 +80,52 @@ class CatalogService {
       throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Повторите импорт через пять минут");
     UUID id = UUID.randomUUID();
     db.update("insert into catalog_import_run(id,source_code,status) values(?,?,'RUNNING')", id, source);
-    executor.execute(() -> {
-      try {
-        save(id, source, adapters.fetch(source));
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        fail(id);
-      } catch (Exception e) {
-        fail(id);
-      }
-    });
+    executor.execute(() -> complete(id, source, () -> adapters.fetch(source)));
     return id;
   }
 
-  void save(UUID run, String source, List<CatalogAdapters.Product> products) {
+  void complete(UUID run, String source, Callable<List<CatalogAdapters.Product>> fetch) {
+    try {
+      save(run, source, fetch.call());
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      fail(run);
+    } catch (Exception e) {
+      fail(run);
+    }
+  }
+
+  private void save(UUID run, String source, List<CatalogAdapters.Product> products) {
     if (products.isEmpty()) {
       fail(run);
       return;
     }
     transaction.executeWithoutResult(status -> {
       for (var p : products) {
-        db.update("""
+        UUID product = db.queryForObject("""
             insert into catalog_product(id,source_code,url,name,product_type,price,currency,availability,offers)
             values(?,?,?,?,?,?,?,?,?::jsonb) on conflict (source_code,url) do update set
             name=excluded.name, product_type=excluded.product_type, price=excluded.price,
             currency=excluded.currency, availability=excluded.availability, offers=excluded.offers,last_seen_at=now()
-            """, UUID.randomUUID(), source, p.url(), p.name(), p.type(), p.price(), p.currency(), p.availability(),
+            returning id
+            """, UUID.class, UUID.randomUUID(), source, p.url(), p.name(), p.type(), p.price(), p.currency(), p.availability(),
             encodeOffers(p.offers()));
+        db.update("""
+            with candidate as (
+              select p.id, jsonb_build_object(
+                'name',p.name,'type',p.product_type,'price',p.price,'currency',p.currency,
+                'availability',p.availability,'offers',p.offers) snapshot
+              from catalog_product p where p.id=?
+            ), inserted as (
+              insert into catalog_revision(id,product_id,snapshot)
+              select gen_random_uuid(),c.id,c.snapshot from candidate c
+              where c.snapshot is distinct from (
+                select r.snapshot from catalog_product p
+                join catalog_revision r on r.id=p.current_revision_id where p.id=c.id)
+              returning id,product_id
+            )
+            update catalog_product p set current_revision_id=i.id from inserted i where i.product_id=p.id
+            """, product);
       }
       db.update("update catalog_import_run set status='PARTIAL',product_count=?,finished_at=now() where id=?",
           products.size(), run);

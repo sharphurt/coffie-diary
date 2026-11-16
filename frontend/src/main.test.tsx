@@ -67,3 +67,20 @@ test('quick cup blocks duplicates while pending and reuses request after failure
   await user.click(screen.getByRole('button', { name: 'Оценить чашку' }));
   expect(screen.getByRole('dialog').textContent).toContain('Чашка уже учтена');
 });
+
+test('catalog shows actual pack price and only confirmed normalized prices', async () => {
+  const defaultApi = mockApi.getMockImplementation()!;
+  mockApi.mockImplementation(async (path, ...args) => path === '/catalog/products'
+    ? [{
+        id: 'catalog-coffee', name: 'Тестовый кофе', url: 'https://folk.shop/tproduct/1-test',
+        source_code: 'FOLK', product_type: 'BEANS', offers: [
+          { variantId: 'large', weightG: 1000, price: 2400, currency: 'RUB', pricePer250g: 600 },
+          { variantId: 'unknown', rawPrice: 'от 900 ₽', weightG: null, pricePer250g: null },
+        ],
+      }]
+    : defaultApi(path, ...args));
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: /Что попробовать/ }));
+  expect(await screen.findByText('1000 г · 2400 RUB · 600 ₽ / 250 г')).toBeTruthy();
+  expect(screen.getByText('Вес неизвестен · от 900 ₽').textContent).not.toContain('/ 250 г');
+});

@@ -106,6 +106,13 @@ function CatalogPanel() {
     {error && <p role="alert">{error}</p>}
     <ul>{products.map(product => <li key={product.id}>
       <a href={product.url} target="_blank" rel="noreferrer">{product.name}</a> · {product.source_code}
+      {" · "}{({ BEANS: "Зёрна", DRIP: "Дрипы", CAPSULES: "Капсулы",
+        INSTANT: "Растворимый", CONCENTRATE: "Концентрат" } as Row)[product.product_type] ?? "Вид неизвестен"}
+      {product.offers?.length ? <ul>{product.offers.map((offer: Row) => <li key={offer.variantId}>
+        {offer.weightG == null ? "Вес неизвестен" : `${offer.weightG} г`}
+        {" · "}{offer.price == null ? offer.rawPrice || "Цена неизвестна" : `${offer.price} ${offer.currency ?? ""}`}
+        {offer.pricePer250g != null && ` · ${offer.pricePer250g} ₽ / 250 г`}
+      </li>)}</ul> : <p>Фасовки неизвестны{product.price != null && ` · опубликованная цена: ${product.price} ${product.currency ?? ""}`}</p>}
     </li>)}</ul>
   </section>;
 }

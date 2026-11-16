@@ -235,7 +235,7 @@ if (process.env.E2E_LIVE_CATALOG === 'true') {
     assert.equal(start.status, 202);
     const { runId } = await start.json();
     let run;
-    for (let attempt = 0; attempt < 120; attempt++) {
+    for (let attempt = 0; attempt < 300; attempt++) {
       run = await read(asFirst, '/catalog/import-runs/' + runId);
       if (run.status !== 'RUNNING') break;
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -243,8 +243,11 @@ if (process.env.E2E_LIVE_CATALOG === 'true') {
     assert.equal(run.status, 'PARTIAL', source + ': ' + JSON.stringify(run));
     assert.ok(run.product_count > 0);
     const products = await read(asFirst, '/catalog/products');
-    const product = products.find(item => item.source_code === source);
+    const product = products.find(item => item.source_code === source && item.product_type === 'BEANS'
+      && item.offers.some(offer => offer.weightG === 1000 && offer.pricePer250g != null));
     assert.ok(product);
+    const large = product.offers.find(offer => offer.weightG === 1000 && offer.pricePer250g != null);
+    assert.ok(Math.abs(large.price / 4 - large.pricePer250g) <= 0.005001);
     const resolved = await asFirst('/catalog/resolve-url', 'POST', { url: product.url });
     assert.equal(resolved.status, 200);
     assert.equal((await resolved.json()).id, product.id);

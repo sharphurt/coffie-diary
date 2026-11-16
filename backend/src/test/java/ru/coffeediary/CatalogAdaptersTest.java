@@ -8,9 +8,42 @@ class CatalogAdaptersTest {
   void folkSitemapAndProductTitle() throws Exception {
     String url = "https://folk.shop/tproduct/123-benga";
     assertEquals(java.util.List.of(url), CatalogAdapters.folkUrls("<urlset><loc>" + url + "</loc></urlset>"));
-    var product = CatalogAdapters.folkProduct(url, "<meta property=\"og:title\" content=\"Кофе &amp; чай\" />");
+    var product = CatalogAdapters.folkProduct(url, """
+        <meta property="og:title" content="Кофе &amp; чай" />
+        var product = {"editions":[{"uid":2,"Вес":"1000","price":"2 400.00"}],
+          "characteristics":[{"title":"Формат","value":"Зёрна"}]};
+        """.replace("\n", ""));
     assertEquals("Кофе & чай", product.name());
     assertNull(product.price());
+    assertEquals("BEANS", product.type());
+    var offer = product.offers().getFirst();
+    assertEquals(1000, offer.weightG());
+    assertEquals(2400, offer.price().intValueExact());
+    assertEquals(600, offer.pricePer250g().intValueExact());
+  }
+
+  @Test
+  void tastyNormalizesOnlyTheOfferWithAnExplicitWeightAndRubles() throws Exception {
+    var listing = new CatalogAdapters.Product("https://shop.tastycoffee.ru/coffee/test",
+        "Кофе", null, null, null, null, java.util.List.of());
+    var product = CatalogAdapters.tastyProduct(listing, """
+        <script type="application/ld+json">
+        {"@type":"Product","description":"Кофе в зёрнах","offers":[
+          {"@type":"Offer","url":"/coffee/test","price":"от 900","priceCurrency":"RUB"},
+          {"@type":"Offer","url":"/coffee/test/standard","price":"900","priceCurrency":"RUB"},
+          {"@type":"Offer","url":"/coffee/test/1000g","price":"2400","priceCurrency":"RUB",
+           "additionalProperty":{"name":"Вес упаковки","value":"1 кг"}},
+          {"@type":"Offer","url":"/coffee/test/250g","price":"10","priceCurrency":"EUR",
+           "additionalProperty":{"name":"Вес упаковки","value":"250 г"}}]}
+        </script>
+        """);
+    assertEquals("BEANS", product.type());
+    assertNull(product.offers().get(0).price());
+    assertEquals("от 900", product.offers().get(0).rawPrice());
+    assertNull(product.offers().get(0).pricePer250g());
+    assertNull(product.offers().get(1).pricePer250g());
+    assertEquals(600, product.offers().get(2).pricePer250g().intValueExact());
+    assertNull(product.offers().get(3).pricePer250g());
   }
 
   @Test
@@ -21,7 +54,8 @@ class CatalogAdaptersTest {
           {"item":{"@type":"Product","name":"Тест","url":"https://shop.tastycoffee.ru/coffee/test?ref=x",
                    "category":"coffee","offers":{"price":649,"priceCurrency":"RUB"}}},
           {"item":{"@type":"Product","name":"Тест","url":"https://shop.tastycoffee.ru/coffee/test",
-                   "category":"coffee","offers":{"price":649,"priceCurrency":"RUB"}}}]}
+                   "category":"coffee","offers":{"price":649,"priceCurrency":"RUB"}}},
+          {"item":{"@type":"Product","name":"Упаковка","url":"https://shop.tastycoffee.ru/giftbox/gift-bag"}}]}
         </script>
         """);
     assertEquals(1, products.size());

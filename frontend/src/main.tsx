@@ -77,6 +77,32 @@ function RecipeFields({ recipe, title = "Обычный рецепт" }: { recip
   );
 }
 
+const descriptorGroups: Record<string, string> = {
+  CHOCOLATE: "шоколад", NUTTY: "орехи", CARAMEL: "карамель", BERRY: "ягоды",
+  FRUITY: "фрукты", CITRUS: "цитрусы", FLORAL: "цветы", TEA: "чай",
+  FERMENTED: "ферментация", SPICY: "пряности", EARTHY: "землистые ноты",
+};
+const processingLabels: Record<string, string> = { NATURAL: "натуральная", WASHED: "мытая", HONEY: "хани" };
+
+function RecommendationReason({ score }: { score: Row }) {
+  const matches = score.reasons as Row[];
+  const first = matches[0];
+  return <>
+    <p>Похож на «{first.purchases[0].lotName}» из вашего дневника.</p>
+    <p>Низкая уверенность: версия вашей пачки не подтверждена.</p>
+    <details>
+      <summary>Почему этот кофе</summary>
+      <ul>{matches.map(reason => <li key={reason.productId}>
+        <a href={reason.sourceUrl} target="_blank" rel="noreferrer">
+          {Array.from(new Set<string>(reason.purchases.map((purchase: Row) => purchase.lotName))).join(", ")}
+        </a> · ваша оценка {sensoryNumber.format(reason.rating)} из 5
+        {!!reason.descriptors.length && <p>Общие ноты: {reason.descriptors.map((group: string) => descriptorGroups[group] ?? group).join(", ")}</p>}
+        {!!reason.processing.length && <p>Общая обработка: {reason.processing.map((code: string) => processingLabels[code] ?? code).join(", ")}</p>}
+      </li>)}</ul>
+    </details>
+  </>;
+}
+
 function DiscoveryCards({ items }: { items: Row[] }) {
   return <ul className="discovery-cards">{items.map(item => (
     <li key={item.id}>
@@ -90,6 +116,7 @@ function DiscoveryCards({ items }: { items: Row[] }) {
       {item.needs_refresh && <p>Наличие и цена требуют проверки</p>}
       {item.availability_unknown && <p>Наличие не подтверждено</p>}
       {item.price_unknown && <p>Не удалось проверить бюджет</p>}
+      {item.recommendation && <RecommendationReason score={item.recommendation} />}
     </li>
   ))}</ul>;
 }
@@ -98,7 +125,7 @@ function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
   const [unknownRoast, setUnknownRoast] = useState(false);
   const [unverified, setUnverified] = useState(false);
   const [budget, setBudget] = useState("");
-  const [result, setResult] = useState<{ items: Row[]; needsCheck: Row[] }>();
+  const [result, setResult] = useState<{ items: Row[]; needsCheck: Row[]; personalItems?: Row[] }>();
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
@@ -115,7 +142,7 @@ function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
   }, [unknownRoast, unverified, budget, catalogRevision]);
 
   return <section aria-labelledby="discovery-title">
-    <h2 id="discovery-title">Для знакомства</h2>
+    <h2 id="discovery-title">{result?.personalItems?.length ? "По вашим оценкам" : "Для знакомства"}</h2>
     <p>Подборка зернового кофе из каталогов обжарщиков.</p>
     <div className="discovery-filters">
       <label className="check"><input type="checkbox" checked={unknownRoast}
@@ -128,7 +155,12 @@ function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
       </label>
     </div>
     {error && <p role="alert">{error}</p>}
-    {result?.items?.length ? <DiscoveryCards items={result.items} /> : result && <p>
+    {!!result?.personalItems?.length && <DiscoveryCards items={result.personalItems ?? []} />}
+    {!!result?.items?.length && <>
+      {!!result?.personalItems?.length && <h3>Для знакомства</h3>}
+      <DiscoveryCards items={result.items} />
+    </>}
+    {result && !result.items?.length && !result.personalItems?.length && <p>
       {unknownRoast ? "Нет подходящего кофе с подтверждённым наличием. Попробуйте изменить фильтры или обновить каталог."
         : "Пока профиль обжарки в каталогах не подтверждён. Включите неизвестную обжарку, чтобы посмотреть подборку."}
     </p>}

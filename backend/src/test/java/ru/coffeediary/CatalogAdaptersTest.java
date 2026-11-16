@@ -1,6 +1,7 @@
 package ru.coffeediary;
 
 import static org.junit.jupiter.api.Assertions.*;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class CatalogAdaptersTest {
@@ -11,11 +12,12 @@ class CatalogAdaptersTest {
     var product = CatalogAdapters.folkProduct(url, """
         <meta property="og:title" content="Кофе &amp; чай" />
         var product = {"descr":"Карамель, цветочный мёд, цитрусовые фрукты","editions":[{"uid":2,"Вес":"1000","price":"2 400.00"}],
-          "characteristics":[{"title":"Формат","value":"Зёрна"}]};
+          "characteristics":[{"title":"Формат","value":"Зёрна"},{"title":"Обработка","value":"Натуральная, мытая"}]};
         """.replace("\n", ""));
     assertEquals("Кофе & чай", product.name());
     assertNull(product.price());
     assertEquals("BEANS", product.type());
+    assertEquals(List.of("NATURAL", "WASHED"), product.processing());
     assertEquals(url, product.producerDescriptors().sourceUrl());
     assertEquals("Карамель, цветочный мёд, цитрусовые фрукты", product.producerDescriptors().rawText());
     assertTrue(product.producerDescriptors().descriptors().contains(new ProducerTaste.Evidence("CARAMEL", "Карамель")));
@@ -32,7 +34,7 @@ class CatalogAdaptersTest {
     var product = CatalogAdapters.tastyProduct(listing, """
         <script id="__NUXT_DATA__" type="application/json">
         [{"slug":1,"mini_description":2},"another","Черника",
-         {"slug":4,"mini_description":5},"/coffee/test","Ноты <span>арахиса</span>, какао и лимона"]
+         {"slug":4,"mini_description":5,"processing_method":6},"/coffee/test","Ноты <span>арахиса</span>, какао и лимона","Мытый"]
         </script>
         <script type="application/ld+json">
         {"@type":"Product","description":"Кофе в зёрнах","offers":[
@@ -47,6 +49,7 @@ class CatalogAdaptersTest {
     assertEquals("BEANS", product.type());
     assertEquals("Ноты арахиса, какао и лимона", product.producerDescriptors().rawText());
     assertEquals("mini_description", product.producerDescriptors().sourceField());
+    assertEquals(List.of("WASHED"), product.processing());
     assertEquals(java.util.Set.of("NUTTY", "CHOCOLATE", "CITRUS"),
         product.producerDescriptors().descriptors().stream().map(ProducerTaste.Evidence::group)
             .collect(java.util.stream.Collectors.toSet()));

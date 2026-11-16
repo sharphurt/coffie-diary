@@ -65,4 +65,50 @@ class DiscoveryPersistenceTest {
     ids.add(id);
     return id;
   }
+
+  @Test
+  void extraCupsDoNotTurnOneBagIntoExtraInfluenceInTheRecommendation() {
+    UUID owner = UUID.randomUUID(), lot = UUID.randomUUID();
+    UUID firstBag = UUID.randomUUID(), secondBag = UUID.randomUUID();
+    db.update("insert into app_user(id,login,password_hash) values(?,?,'test')", owner, owner.toString());
+    var products = new ArrayList<UUID>();
+    try {
+      UUID known = product(products, "FOLK", "BEANS", "InStock", 400, 0);
+      UUID candidate = product(products, "TASTY", "BEANS", "InStock", 400, 0);
+      db.update("""
+          update catalog_product set processing='["NATURAL"]',
+            producer_descriptors='{"rawText":"Фрукты","descriptors":[{"group":"FRUITY"}]}'
+          where id in (?,?)
+          """, known, candidate);
+      db.update("insert into personal_lot(id,owner_id,name,catalog_product_id) values(?,?,'rated lot',?)", lot, owner, known);
+      for (UUID bag : List.of(firstBag, secondBag)) db.update(
+          "insert into coffee_bag(id,owner_id,lot_id,mass_g,status) values(?,?,?,250,'FINISHED')", bag, owner, lot);
+      tasting(owner, firstBag, 5);
+      tasting(owner, secondBag, 1);
+      var initial = service.recommend(owner, true, false, null);
+      for (int i = 0; i < 9; i++) tasting(owner, firstBag, 5);
+      var anchors = service.anchors(owner);
+      assertEquals(1, anchors.size());
+      assertEquals(2, anchors.getFirst().purchases().size());
+      assertEquals(3.0, anchors.getFirst().rating(), 1e-9);
+      assertEquals("PERSONAL", initial.mode());
+      assertEquals(candidate, initial.personalItems().getFirst().get("id"));
+      var score = (TasteRanking.Score) initial.personalItems().getFirst().get("recommendation");
+      assertEquals(lot, score.reasons().getFirst().purchases().getFirst().lotId());
+      assertEquals(initial, service.recommend(owner, true, false, null));
+    } finally {
+      db.update("delete from tasting where owner_id=?", owner);
+      db.update("delete from coffee_bag where owner_id=?", owner);
+      db.update("delete from personal_lot where owner_id=?", owner);
+      for (UUID id : products) db.update("delete from catalog_product where id=?", id);
+      db.update("delete from app_user where id=?", owner);
+    }
+  }
+
+  private void tasting(UUID owner, UUID bag, int rating) {
+    db.update("""
+        insert into tasting(id,owner_id,bag_id,tasted_at,overall_rating,sensory,brew_snapshot)
+        values(?,?,?,now(),?,'{}','{"method":"POUR_OVER","milkSugar":"NONE"}')
+        """, UUID.randomUUID(), owner, bag, rating);
+  }
 }

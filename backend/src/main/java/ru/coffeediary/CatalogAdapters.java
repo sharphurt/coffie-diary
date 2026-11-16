@@ -16,7 +16,11 @@ final class CatalogAdapters {
   record Offer(String variantId, Integer weightG, BigDecimal price, String currency, String availability,
       BigDecimal pricePer250g, String rawPrice) {}
   record Product(String url, String name, String type, BigDecimal price, String currency, String availability,
-      List<Offer> offers, ProducerTaste.Document producerDescriptors) {
+      List<Offer> offers, ProducerTaste.Document producerDescriptors, List<String> processing) {
+    Product(String url, String name, String type, BigDecimal price, String currency, String availability,
+        List<Offer> offers, ProducerTaste.Document producerDescriptors) {
+      this(url, name, type, price, currency, availability, offers, producerDescriptors, List.of());
+    }
     Product(String url, String name, String type, BigDecimal price, String currency, String availability,
         List<Offer> offers) {
       this(url, name, type, price, currency, availability, offers, null);
@@ -88,14 +92,17 @@ final class CatalogAdapters {
           edition.path("price"), "RUB", null));
     }
     String type = null;
+    List<String> processing = List.of();
     for (var characteristic : product.path("characteristics")) {
       if ("Формат".equals(characteristic.path("title").asText()))
         type = productType(characteristic.path("value").asText());
+      if ("Обработка".equals(characteristic.path("title").asText()))
+        processing = processing(characteristic.path("value").asText());
     }
     if (type == null) type = productType(product.path("text").asText());
     return new Product(url, HtmlUtils.htmlUnescape(title.group(1)).strip(), type,
         price(product.path("price")), "RUB", null, offers,
-        ProducerTaste.extract(product.path("descr").asText(null), url, "descr"));
+        ProducerTaste.extract(product.path("descr").asText(null), url, "descr"), processing);
   }
 
   static List<Product> tasty(String html) throws IOException {
@@ -148,29 +155,48 @@ final class CatalogAdapters {
       }
       String type = productType(product.path("description").asText());
       if (type == null) type = productType(listed.name());
+      var published = tastyDetails(listed.url(), html);
       return new Product(listed.url(), listed.name(), type, listed.price(),
           listed.currency(), listed.availability(), List.copyOf(offers.values()),
-          tastyDescriptors(listed.url(), html));
+          published.descriptors(), published.processing());
     }
     return listed;
   }
 
-  private static ProducerTaste.Document tastyDescriptors(String url, String html) throws IOException {
+  private record PublishedTaste(ProducerTaste.Document descriptors, List<String> processing) {}
+
+  private static PublishedTaste tastyDetails(String url, String html) throws IOException {
     var script = NUXT.matcher(html);
-    if (!script.find()) return null;
+    var empty = new PublishedTaste(null, List.of());
+    if (!script.find()) return empty;
     var data = JSON.readTree(script.group(1));
-    if (!data.isArray()) return null;
+    if (!data.isArray()) return empty;
     String path = URI.create(url).getPath();
     String slug = path.substring("/coffee/".length());
     for (var object : data) {
       var slugRef = object.path("slug");
       var descriptionRef = object.path("mini_description");
-      if (!slugRef.isIntegralNumber() || !descriptionRef.isIntegralNumber()) continue;
+      if (!slugRef.isIntegralNumber()) continue;
       String publishedSlug = data.path(slugRef.intValue()).asText();
-      if (path.equals(publishedSlug) || slug.equals(publishedSlug))
-        return ProducerTaste.extract(data.path(descriptionRef.intValue()).asText(null), url, "mini_description");
+      if (path.equals(publishedSlug) || slug.equals(publishedSlug)) {
+        var processRef = object.path("processing_method");
+        if (!descriptionRef.isIntegralNumber() && !processRef.isIntegralNumber()) continue;
+        String description = data.path(descriptionRef.asInt(-1)).asText(null);
+        return new PublishedTaste(ProducerTaste.extract(description, url, "mini_description"),
+            processing(data.path(processRef.asInt(-1)).asText()));
+      }
     }
-    return null;
+    return empty;
+  }
+
+  static List<String> processing(String raw) {
+    return Arrays.stream(raw.toLowerCase(Locale.ROOT).replace('ё', 'е').split("[,/;]"))
+        .map(String::strip).map(value -> switch (value) {
+          case "натуральная", "натуральный", "сухая", "natural" -> "NATURAL";
+          case "мытая", "мытый", "washed" -> "WASHED";
+          case "хани", "honey" -> "HONEY";
+          default -> "";
+        }).filter(value -> !value.isEmpty()).distinct().sorted().toList();
   }
 
   private static Offer offer(String id, Integer grams, JsonNode value, String currency, String availability) {

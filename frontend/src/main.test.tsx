@@ -112,3 +112,26 @@ test('discovery shows store links and separates offers that need checking', asyn
   expect(await screen.findByRole('heading', { name: 'Нужно проверить' })).toBeTruthy();
   expect(screen.getByText('Наличие не подтверждено')).toBeTruthy();
 });
+
+test('personal recommendation explains the rated lot and published similarities', async () => {
+  const defaultApi = mockApi.getMockImplementation()!;
+  const source = 'https://folk.shop/tproduct/1-test';
+  mockApi.mockImplementation(async (path, ...args) => path.startsWith('/recommendations?')
+    ? { items: [], needsCheck: [], personalItems: [{
+        id: 'candidate', name: 'Новая Бразилия', url: 'https://shop.tastycoffee.ru/coffee/test',
+        source_code: 'TASTY', recommendation: { reasons: [{
+          productId: 'rated', sourceUrl: source, rating: 4, purchases: [{ lotName: 'Любимая Бразилия' }],
+          descriptors: ['NUTTY'], processing: ['NATURAL'],
+        }] },
+      }] }
+    : defaultApi(path, ...args));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: /Что попробовать/ }));
+  expect(await screen.findByRole('heading', { name: 'По вашим оценкам' })).toBeTruthy();
+  expect(screen.getByText(/Низкая уверенность/)).toBeTruthy();
+  await user.click(screen.getByText('Почему этот кофе'));
+  expect(screen.getByRole('link', { name: 'Любимая Бразилия' }).getAttribute('href')).toBe(source);
+  expect(screen.getByText('Общие ноты: орехи')).toBeTruthy();
+  expect(screen.getByText('Общая обработка: натуральная')).toBeTruthy();
+});

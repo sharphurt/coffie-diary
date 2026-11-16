@@ -12,14 +12,16 @@ test('only top-level customer cards for the current product enter the import', a
     const review = text => '<div class="text-post">' + text + '</div>' + product;
     await page.route(url, route => route.fulfill({ contentType: 'text/html; charset=utf-8', body:
       '<button>Комментарии</button><div class="cards-community-post">'
-      + '<article class="review-card">' + review('Кофе не горчит')
+      + '<article class="review-card" data-author-id="123">' + review('Кофе не горчит')
       + '<article class="review-card">' + review('Вложенный ответ') + '</article></article>'
       + '<article class="review-card">' + review('Кофе   не горчит') + '</article>'
       + '<article class="review-card"><span>Команда поддержки</span>' + review('Ответ сотрудника') + '</article>'
       + '<article class="review-card">' + review('Другой товар').replace(url, url + '-other') + '</article>'
       + '</div>',
     }));
-    assert.deepEqual(await collectTastyReviews(page, url), ['Кофе не горчит']);
+    assert.deepEqual(await collectTastyReviews(page, url), {
+      texts: ['Кофе не горчит'], authorIds: { 'Кофе не горчит': '123' },
+    });
   } finally {
     await browser.close();
   }

@@ -41,7 +41,9 @@ class CatalogService {
         """);
   }
 
-  record ReviewImport(String url, List<String> texts) {}
+  record ReviewImport(String url, List<String> texts, Map<String, String> authorIds) {
+    ReviewImport(String url, List<String> texts) { this(url, texts, null); }
+  }
 
   Object importReviews(UUID id, ReviewImport input) {
     if (input.texts() == null || input.texts().size() > 50)
@@ -57,11 +59,19 @@ class CatalogService {
           throw new Rules.Invalid("texts", "Некорректный текст отзыва");
         String normalized = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFC)
             .replaceAll("(?U)\\s+", " ").strip();
+        String author = input.authorIds() == null ? null : input.authorIds().get(text);
+        if (author != null && !author.matches("[1-9][0-9]{0,39}"))
+          throw new Rules.Invalid("authorIds", "Некорректный ID автора");
         db.update("""
-            insert into external_review(product_id,content_hash,body,source_url)
-            values(?,encode(sha256(convert_to(?, 'UTF8')), 'hex'),?,?)
-            on conflict (product_id,content_hash) do nothing
-            """, id, normalized, normalized, url);
+            insert into external_review as r(product_id,content_hash,body,source_url,author_hash)
+            values(?,encode(sha256(convert_to(?, 'UTF8')), 'hex'),?,?,
+                   encode(sha256(convert_to(?, 'UTF8')), 'hex'))
+            on conflict (product_id,content_hash) do update set
+              author_hash=coalesce(r.author_hash,excluded.author_hash),
+              author_ambiguous=r.author_ambiguous or
+                (r.author_hash is not null and excluded.author_hash is not null
+                 and r.author_hash<>excluded.author_hash)
+            """, id, normalized, normalized, url, author);
       }
       db.update("update catalog_product set reviews_status=? where id=?",
           input.texts().isEmpty() ? "UNAVAILABLE" : "AVAILABLE", id);
@@ -81,18 +91,23 @@ class CatalogService {
   Object reviewFeatures(UUID id) {
     product(id);
     var observations = new ArrayList<Map<String, Object>>();
+    var samples = new ArrayList<ReviewTasteSummary.Sample>();
     for (var review : db.queryForList("""
-        select content_hash,body,source_url from external_review where product_id=?
+        select content_hash,body,source_url,author_hash,author_ambiguous from external_review where product_id=?
         order by observed_at desc,content_hash limit 500
         """, id)) {
       for (var signal : ReviewTaste.extract((String) review.get("body"))) {
+        String author = Boolean.TRUE.equals(review.get("author_ambiguous"))
+            ? null : (String) review.get("author_hash");
+        samples.add(new ReviewTasteSummary.Sample(author, signal));
         observations.add(Map.of("dimension", signal.dimension(), "bucket", signal.bucket(),
             "evidence", signal.evidence(), "reviewHash", review.get("content_hash"),
-            "sourceUrl", review.get("source_url")));
+            "sourceUrl", review.get("source_url"), "authorIdentified", author != null));
       }
     }
-    return Map.of("extractorVersion", ReviewTaste.VERSION, "authorsVerified", false,
-        "observations", observations);
+    return Map.of("extractorVersion", ReviewTaste.VERSION, "authorsVerified",
+        !samples.isEmpty() && samples.stream().allMatch(sample -> sample.author() != null),
+        "observations", observations, "summary", ReviewTasteSummary.summarize(samples));
   }
 
   Object products(String q) {

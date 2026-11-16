@@ -48,6 +48,25 @@ class CatalogPersistenceTest {
       assertEquals("bitterness", signal.get("dimension"));
       assertEquals(url, signal.get("sourceUrl"));
       assertEquals(false, features.get("authorsVerified"));
+      service.importReviews(id, new CatalogService.ReviewImport(url,
+          List.of("Кофе не горчит", "Совсем не горчит", "Напиток без горечи", "Горчит"),
+          Map.of("Кофе не горчит", "101", "Совсем не горчит", "101",
+              "Напиток без горечи", "102", "Горчит", "103")));
+      var summary = (Map<?, ?>) ((Map<?, ?>) service.reviewFeatures(id)).get("summary");
+      var taste = (ReviewTasteSummary.Dimension) summary.get("bitterness");
+      assertEquals("CONSENSUS", taste.status());
+      assertEquals("LOW", taste.bucket());
+      assertEquals(3, taste.independentAuthors());
+      service.importReviews(id, new CatalogService.ReviewImport(url,
+          List.of("Кофе не горчит"), Map.of("Кофе не горчит", "104")));
+      summary = (Map<?, ?>) ((Map<?, ?>) service.reviewFeatures(id)).get("summary");
+      taste = (ReviewTasteSummary.Dimension) summary.get("bitterness");
+      assertEquals(3, taste.independentAuthors(), "duplicate text must not add author 104");
+      assertEquals(1, taste.unverifiedObservations());
+      service.importReviews(id, new CatalogService.ReviewImport(url,
+          List.of("Кофе явно горчит"), Map.of("Кофе явно горчит", "105")));
+      summary = (Map<?, ?>) ((Map<?, ?>) service.reviewFeatures(id)).get("summary");
+      assertEquals("CONFLICTED", ((ReviewTasteSummary.Dimension) summary.get("bitterness")).status());
     } finally {
       db.update("delete from external_review where product_id=?", id);
       db.update("delete from catalog_product where id=?", id);

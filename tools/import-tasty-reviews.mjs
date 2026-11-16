@@ -7,13 +7,14 @@ export async function collectTastyReviews(page, url) {
   assert.match(url, productPattern);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
   await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
-  if (page.url() !== url) return [];
+  if (page.url() !== url) return { texts: [], authorIds: {} };
   const tab = page.getByRole('button', { name: /^Комментарии/ }).first();
   await tab.click({ timeout: 10000 });
   const card = page.locator('.cards-community-post .review-card .text-post');
-  if (!(await card.first().waitFor({ state: 'visible', timeout: 12000 }).then(() => true, () => false))) return [];
+  if (!(await card.first().waitFor({ state: 'visible', timeout: 12000 }).then(() => true, () => false)))
+    return { texts: [], authorIds: {} };
   return page.locator('.cards-community-post .review-card').evaluateAll((cards, expected) => {
-    const texts = new Set();
+    const reviews = new Map();
     for (const card of cards) {
       if (card.parentElement?.closest('.review-card')) continue;
       const own = selector => [...card.querySelectorAll(selector)]
@@ -28,16 +29,21 @@ export async function collectTastyReviews(page, url) {
       const href = new URL(product.href);
       if (href.origin + href.pathname !== expected) continue;
       const text = body.textContent.replace(/\s+/gu, ' ').trim();
-      if (text && text.length <= 8000) texts.add(text);
-      if (texts.size >= 50) break;
+      if (!text || text.length > 8000) continue;
+      const author = card.getAttribute('data-author-id');
+      if (!reviews.has(text) && reviews.size >= 50) continue;
+      if (!reviews.has(text)) reviews.set(text, new Set());
+      if (/^[1-9][0-9]{0,39}$/.test(author ?? '')) reviews.get(text).add(author);
     }
-    return [...texts];
+    return { texts: [...reviews.keys()], authorIds: Object.fromEntries(
+      [...reviews].filter(([, ids]) => ids.size === 1).map(([text, ids]) => [text, [...ids][0]]),
+    ) };
   }, url);
 }
 
 export async function importTastyReviews(product, submit) {
   assert.match(product.url, productPattern);
-  let texts = [];
+  let batch = { texts: [], authorIds: {} };
   let browser;
   try {
     browser = await chromium.launch();
@@ -47,13 +53,13 @@ export async function importTastyReviews(product, submit) {
       return request.isNavigationRequest() && new URL(request.url()).origin !== 'https://shop.tastycoffee.ru'
         ? route.abort() : route.continue();
     });
-    texts = await collectTastyReviews(await context.newPage(), product.url);
+    batch = await collectTastyReviews(await context.newPage(), product.url);
   } catch (error) {
     console.error('Вкладка отзывов недоступна:', error.name);
   } finally {
     await browser?.close();
   }
-  return submit(product.id, { url: product.url, texts });
+  return submit(product.id, { url: product.url, ...batch });
 }
 
 async function cli() {

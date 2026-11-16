@@ -81,22 +81,21 @@ test('catalog shows actual pack price and only confirmed normalized prices', asy
     : defaultApi(path, ...args));
   render(<App />);
   await userEvent.click(await screen.findByRole('button', { name: /Что попробовать/ }));
+  await userEvent.click(screen.getByText('Все товары FOLK'));
   expect(await screen.findByText('1000 г · 2400 RUB · 600 ₽ / 250 г')).toBeTruthy();
   expect(screen.getByText('Вес неизвестен · от 900 ₽').textContent).not.toContain('/ 250 г');
 });
 
-test('discovery shows store links and separates offers that need checking', async () => {
+test('FOLK discovery shows the link for an unverified offer and sends roast filters', async () => {
   const defaultApi = mockApi.getMockImplementation()!;
-  const link = 'https://shop.tastycoffee.ru/coffee/test';
+  const link = 'https://folk.shop/tproduct/1-test';
   mockApi.mockImplementation(async (path, ...args) => {
     if (!path.startsWith('/recommendations?')) return defaultApi(path, ...args);
     const params = new URLSearchParams(path.split('?')[1]);
     return {
-      items: params.get('includeUnknownRoast') === 'true' ? [
-        { id: 'tasty', name: 'Бразилия', url: link, source_code: 'TASTY', price: 520, weight_g: 250, currency: 'RUB' },
-      ] : [],
-      needsCheck: params.get('includeUnverified') === 'true' ? [
-        { id: 'folk', name: 'Колумбия', url: 'https://folk.shop/tproduct/1-test', source_code: 'FOLK',
+      items: [], hasRatedFolkLot: false,
+      needsCheck: params.get('roast') === 'ESPRESSO' && params.get('includeUnknownRoast') === 'true' ? [
+        { id: 'folk', name: 'Колумбия', url: link, source_code: 'FOLK',
           availability_unknown: true },
       ] : [],
     };
@@ -104,13 +103,13 @@ test('discovery shows store links and separates offers that need checking', asyn
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole('button', { name: /Что попробовать/ }));
-  expect(await screen.findByRole('heading', { name: 'Для знакомства' })).toBeTruthy();
+  expect(await screen.findByRole('heading', { name: 'FOLK для знакомства' })).toBeTruthy();
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Обжарка' }), 'ESPRESSO');
   await user.click(screen.getByRole('checkbox', { name: 'Включить неизвестную обжарку' }));
-  expect((await screen.findByRole('link', { name: 'Бразилия' })).getAttribute('href')).toBe(link);
-  expect(screen.queryByText('Колумбия')).toBeNull();
-  await user.click(screen.getByRole('checkbox', { name: 'Показать товары, которые нужно проверить' }));
   expect(await screen.findByRole('heading', { name: 'Нужно проверить' })).toBeTruthy();
-  expect(screen.getByText('Наличие не подтверждено')).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Проверить у FOLK' }).getAttribute('href')).toBe(link);
+  await user.click(screen.getByRole('button', { name: 'Открыть мои лоты' }));
+  expect(await screen.findByRole('button', { name: 'Создать лот' })).toBeTruthy();
 });
 
 test('personal recommendation explains the rated lot and published similarities', async () => {
@@ -118,20 +117,21 @@ test('personal recommendation explains the rated lot and published similarities'
   const source = 'https://folk.shop/tproduct/1-test';
   mockApi.mockImplementation(async (path, ...args) => path.startsWith('/recommendations?')
     ? { items: [], needsCheck: [], personalItems: [{
-        id: 'candidate', name: 'Новая Бразилия', url: 'https://shop.tastycoffee.ru/coffee/test',
-        source_code: 'TASTY', recommendation: { reasons: [{
-          productId: 'rated', sourceUrl: source, rating: 4, purchases: [{ lotName: 'Любимая Бразилия' }],
-          descriptors: ['NUTTY'], processing: ['NATURAL'],
-        }] },
+        id: 'candidate', name: 'Новая Бразилия', url: 'https://folk.shop/tproduct/2-test', roast: 'FILTER',
+        price: 820, price_per_250g: 820, weight_g: 250, currency: 'RUB',
+        folk_reason: { sourceUrl: source, rating: 4, lotName: 'Любимая Бразилия', direction: 'SIMILAR',
+          sharedDescriptors: ['NUTTY'], sharedProcessing: ['NATURAL'],
+          candidateDescriptors: [], anchorDescriptors: [], candidateProcessing: [], anchorProcessing: [] },
       }] }
     : defaultApi(path, ...args));
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole('button', { name: /Что попробовать/ }));
-  expect(await screen.findByRole('heading', { name: 'По вашим оценкам' })).toBeTruthy();
-  expect(screen.getByText(/Низкая уверенность/)).toBeTruthy();
-  await user.click(screen.getByText('Почему этот кофе'));
+  expect(await screen.findByRole('heading', { name: 'Что купить у FOLK' })).toBeTruthy();
   expect(screen.getByRole('link', { name: 'Любимая Бразилия' }).getAttribute('href')).toBe(source);
-  expect(screen.getByText('Общие ноты: орехи')).toBeTruthy();
-  expect(screen.getByText('Общая обработка: натуральная')).toBeTruthy();
+  expect(screen.getByText('Общие ноты по описанию FOLK: орехи.')).toBeTruthy();
+  expect(screen.getByText('Общая обработка: натуральная.')).toBeTruthy();
+  expect(screen.getByText(/250 г · 820 RUB/)).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Открыть товар на FOLK' }).getAttribute('href'))
+    .toBe('https://folk.shop/tproduct/2-test');
 });

@@ -6,7 +6,8 @@ import org.junit.jupiter.api.Test;
 
 class ReviewTasteSummaryTest {
   private static ReviewTasteSummary.Sample sample(String author, String bucket) {
-    return new ReviewTasteSummary.Sample(author, new ReviewTaste.Observation("bitterness", bucket, "fixture"));
+    return new ReviewTasteSummary.Sample(author, new ReviewTaste.Observation("bitterness", bucket, "fixture"),
+        "https://example.test/" + author);
   }
 
   @Test
@@ -31,6 +32,7 @@ class ReviewTasteSummaryTest {
     assertEquals("LOW", taste.bucket());
     assertEquals(2, taste.distribution().get("LOW"));
     assertEquals(3, taste.independentAuthors());
+    assertEquals(List.of("https://example.test/one", "https://example.test/two"), taste.sourceUrls());
   }
 
   @Test
@@ -42,5 +44,6 @@ class ReviewTasteSummaryTest {
     assertNull(taste.bucket());
     assertEquals(4, taste.independentAuthors());
     assertEquals(1, taste.conflictingAuthors());
+    assertTrue(taste.sourceUrls().isEmpty());
   }
 }

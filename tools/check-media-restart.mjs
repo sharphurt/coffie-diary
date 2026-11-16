@@ -229,76 +229,59 @@ assert.equal((await asSecond(cupPath(guestCup), 'PATCH', {
 assert.deepEqual(await read(asSecond, cupPath(guestCup)), guestCup);
 console.log('PASS: lot, bag and cup isolation and concurrent version conflicts');
 
+assert.equal((await asFirst('/catalog/sources/TASTY/sync', 'POST')).status, 404);
+assert.deepEqual((await read(asFirst, '/catalog/sources')).map(source => source.code), ['FOLK']);
+
 if (process.env.E2E_LIVE_CATALOG === 'true') {
-  for (const source of ['FOLK', 'TASTY']) {
-    const start = await asFirst('/catalog/sources/' + source + '/sync', 'POST');
-    assert.equal(start.status, 202);
-    const { runId } = await start.json();
-    let run;
-    for (let attempt = 0; attempt < 300; attempt++) {
-      run = await read(asFirst, '/catalog/import-runs/' + runId);
-      if (run.status !== 'RUNNING') break;
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    assert.equal(run.status, 'PARTIAL', source + ': ' + JSON.stringify(run));
-    assert.ok(run.product_count > 0);
-    const products = await read(asFirst, '/catalog/products');
-    const product = products.find(item => item.source_code === source && item.product_type === 'BEANS'
-      && item.offers.some(offer => offer.weightG === 1000 && offer.pricePer250g != null)
-      && item.producer_descriptors?.descriptors.length > 0);
-    assert.ok(product);
-    assert.equal(product.producer_descriptors.sourceUrl, product.url);
-    assert.equal(product.producer_descriptors.sourceField, source === 'FOLK' ? 'descr' : 'mini_description');
-    assert.ok(product.producer_descriptors.descriptors.every(signal =>
-      product.producer_descriptors.rawText.includes(signal.term)));
-    const large = product.offers.find(offer => offer.weightG === 1000 && offer.pricePer250g != null);
-    assert.ok(Math.abs(large.price / 4 - large.pricePer250g) <= 0.005001);
-    const resolved = await asFirst('/catalog/resolve-url', 'POST', { url: product.url });
-    assert.equal(resolved.status, 200);
-    assert.equal((await resolved.json()).id, product.id);
-    const path = '/lots/' + firstBag.lot_id;
-    const original = await read(asFirst, path);
-    assert.equal(original.catalog_product_id, null);
-    const confirmed = await asFirst(path + '/catalog-link', 'PUT', {
-      productId: product.id, version: original.version,
-    });
-    assert.equal(confirmed.status, 200);
-    assert.equal((await read(asFirst, path)).catalog_product_id, product.id);
-    assert.equal((await asSecond(path + '/catalog-link', 'PUT', {
-      productId: product.id, version: original.version + 1,
-    })).status, 404);
-    assert.equal((await asFirst(path + '/catalog-link?version=' + (original.version + 1), 'DELETE')).status, 200);
-    assert.equal((await read(asFirst, path)).catalog_product_id, null);
-    console.log('PASS: live ' + source + ' partial import (' + run.product_count + ') and confirmed lot link');
-    if (source === 'TASTY') {
-      const url = 'https://shop.tastycoffee.ru/coffee/braziliya-sul-de-minas';
-      const targetResponse = await asFirst('/catalog/resolve-url', 'POST', { url });
-      assert.equal(targetResponse.status, 200);
-      const target = await targetResponse.json();
-      const { importTastyReviews } = await import('./import-tasty-reviews.mjs');
-      const path = '/catalog/products/' + target.id + '/reviews';
-      const submit = async (_, batch) => {
-        const response = await asFirst(path + '/import', 'POST', batch);
-        assert.equal(response.status, 200);
-        return response.json();
-      };
-      let captured;
-      const imported = await importTastyReviews(target, (id, batch) => {
-        captured = batch;
-        return submit(id, batch);
-      });
-      assert.equal(imported.status, 'AVAILABLE');
-      assert.ok(imported.items.length > 0);
-      assert.ok(imported.items.every(item => item.source_url === url && item.body));
-      assert.deepEqual(await submit(target.id, captured), imported);
-      assert.equal((await asFirst(path + '/import', 'POST', {
-        ...captured, url: 'https://shop.tastycoffee.ru/coffee/wrong-product',
-      })).status, 422);
-      assert.deepEqual(await submit(target.id, { url, texts: [] }), {
-        status: 'UNAVAILABLE', items: imported.items,
-      });
-      assert.deepEqual(await read(asFirst, path), { status: 'UNAVAILABLE', items: imported.items });
-      console.log('PASS: live Tasty reviews linked, repeated batch deduplicated and unavailable batch preserved reviews');
-    }
+  const source = 'FOLK';
+  const start = await asFirst('/catalog/sources/' + source + '/sync', 'POST');
+  assert.equal(start.status, 202);
+  const { runId } = await start.json();
+  let run;
+  for (let attempt = 0; attempt < 300; attempt++) {
+    run = await read(asFirst, '/catalog/import-runs/' + runId);
+    if (run.status !== 'RUNNING') break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
+  assert.equal(run.status, 'PARTIAL', source + ': ' + JSON.stringify(run));
+  assert.ok(run.product_count > 0);
+  const products = await read(asFirst, '/catalog/products');
+  assert.ok(products.every(item => item.source_code === source));
+  const product = products.find(item => item.source_code === source && item.product_type === 'BEANS' && item.roast === 'FILTER'
+    && item.offers.some(offer => offer.weightG === 1000 && offer.pricePer250g != null)
+    && item.producer_descriptors?.descriptors.length > 0);
+  assert.ok(product);
+  assert.equal(product.producer_descriptors.sourceUrl, product.url);
+  assert.equal(product.producer_descriptors.sourceField, 'descr');
+  assert.ok(product.producer_descriptors.descriptors.every(signal =>
+    product.producer_descriptors.rawText.includes(signal.term)));
+  const large = product.offers.find(offer => offer.weightG === 1000 && offer.pricePer250g != null);
+  assert.ok(Math.abs(large.price / 4 - large.pricePer250g) <= 0.005001);
+  const resolved = await asFirst('/catalog/resolve-url', 'POST', { url: product.url });
+  assert.equal(resolved.status, 200);
+  assert.equal((await resolved.json()).id, product.id);
+  const bagResponse = await asFirst('/bags', 'POST', { name: 'FOLK recommendation fixture' });
+  assert.equal(bagResponse.status, 200);
+  const bag = await bagResponse.json();
+  const path = '/lots/' + bag.lot_id;
+  const original = await read(asFirst, path);
+  assert.equal(original.catalog_product_id, null);
+  const confirmed = await asFirst(path + '/catalog-link', 'PUT', {
+    productId: product.id, version: original.version,
+  });
+  assert.equal(confirmed.status, 200);
+  assert.equal((await read(asFirst, path)).catalog_product_id, product.id);
+  const tasting = await asFirst('/tastings', 'POST', { bagId: bag.id, overallRating: 5 });
+  assert.equal(tasting.status, 200);
+  const recommendations = await read(asFirst, '/recommendations');
+  assert.equal(recommendations.mode, 'PERSONAL');
+  assert.ok(recommendations.personalItems.length > 0 && recommendations.personalItems.length <= 3);
+  assert.ok(recommendations.personalItems.every(item => item.source_code === source
+    && item.folk_reason.lotId === bag.lot_id && item.price != null));
+  assert.equal((await asSecond(path + '/catalog-link', 'PUT', {
+    productId: product.id, version: original.version + 1,
+  })).status, 404);
+  assert.equal((await asFirst(path + '/catalog-link?version=' + (original.version + 1), 'DELETE')).status, 200);
+  assert.equal((await read(asFirst, path)).catalog_product_id, null);
+  console.log('PASS: live FOLK import (' + run.product_count + '), lot link and recommendation from one rating');
 }

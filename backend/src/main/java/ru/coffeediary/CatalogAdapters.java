@@ -16,7 +16,11 @@ final class CatalogAdapters {
   record Offer(String variantId, Integer weightG, BigDecimal price, String currency, String availability,
       BigDecimal pricePer250g, String rawPrice) {}
   record Product(String url, String name, String type, BigDecimal price, String currency, String availability,
-      List<Offer> offers, ProducerTaste.Document producerDescriptors, List<String> processing) {
+      List<Offer> offers, ProducerTaste.Document producerDescriptors, List<String> processing, String roast) {
+    Product(String url, String name, String type, BigDecimal price, String currency, String availability,
+        List<Offer> offers, ProducerTaste.Document producerDescriptors, List<String> processing) {
+      this(url, name, type, price, currency, availability, offers, producerDescriptors, processing, null);
+    }
     Product(String url, String name, String type, BigDecimal price, String currency, String availability,
         List<Offer> offers, ProducerTaste.Document producerDescriptors) {
       this(url, name, type, price, currency, availability, offers, producerDescriptors, List.of());
@@ -88,21 +92,36 @@ final class CatalogAdapters {
     var product = JSON.readTree(payload.group(1));
     var offers = new ArrayList<Offer>();
     for (var edition : product.path("editions")) {
+      String quantity = edition.path("quantity").asText("").strip();
+      String availability = quantity.matches("[0-9]+")
+          ? quantity.matches("0+") ? "OutOfStock" : "InStock" : null;
       offers.add(offer(edition.path("uid").asText(), weight(edition.path("Вес").asText(), true),
-          edition.path("price"), "RUB", null));
+          edition.path("price"), "RUB", availability));
     }
     String type = null;
+    String roast = null;
     List<String> processing = List.of();
     for (var characteristic : product.path("characteristics")) {
       if ("Формат".equals(characteristic.path("title").asText()))
         type = productType(characteristic.path("value").asText());
       if ("Обработка".equals(characteristic.path("title").asText()))
         processing = processing(characteristic.path("value").asText());
+      if ("Обжарка".equals(characteristic.path("title").asText()))
+        roast = folkRoast(characteristic.path("value").asText());
     }
     if (type == null) type = productType(product.path("text").asText());
     return new Product(url, HtmlUtils.htmlUnescape(title.group(1)).strip(), type,
         price(product.path("price")), "RUB", null, offers,
-        ProducerTaste.extract(product.path("descr").asText(null), url, "descr"), processing);
+        ProducerTaste.extract(product.path("descr").asText(null), url, "descr"), processing, roast);
+  }
+
+  private static String folkRoast(String raw) {
+    return switch (raw.strip().toLowerCase(Locale.ROOT)) {
+      case "фильтр", "для фильтра" -> "FILTER";
+      case "эспрессо", "для эспрессо" -> "ESPRESSO";
+      case "омни", "омни-обжарка", "универсальная", "фильтр и эспрессо", "эспрессо и фильтр" -> "OMNI";
+      default -> null;
+    };
   }
 
   static List<Product> tasty(String html) throws IOException {

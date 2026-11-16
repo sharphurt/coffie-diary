@@ -11,13 +11,18 @@ class CatalogAdaptersTest {
     assertEquals(java.util.List.of(url), CatalogAdapters.folkUrls("<urlset><loc>" + url + "</loc></urlset>"));
     var product = CatalogAdapters.folkProduct(url, """
         <meta property="og:title" content="Кофе &amp; чай" />
-        var product = {"descr":"Карамель, цветочный мёд, цитрусовые фрукты","editions":[{"uid":2,"Вес":"1000","price":"2 400.00"}],
-          "characteristics":[{"title":"Формат","value":"Зёрна"},{"title":"Обработка","value":"Натуральная, мытая"}]};
+        var product = {"descr":"Карамель, цветочный мёд, цитрусовые фрукты","editions":[
+          {"uid":2,"Вес":"1000","price":"2 400.00","quantity":"7"},
+          {"uid":3,"Вес":"250","price":"600","quantity":0},
+          {"uid":4,"Вес":"250","price":"650","quantity":""}],
+          "characteristics":[{"title":"Формат","value":"Зёрна"},{"title":"Обработка","value":"Натуральная, мытая"},
+          {"title":"Обжарка","value":"Фильтр"}]};
         """.replace("\n", ""));
     assertEquals("Кофе & чай", product.name());
     assertNull(product.price());
     assertEquals("BEANS", product.type());
     assertEquals(List.of("NATURAL", "WASHED"), product.processing());
+    assertEquals("FILTER", product.roast());
     assertEquals(url, product.producerDescriptors().sourceUrl());
     assertEquals("Карамель, цветочный мёд, цитрусовые фрукты", product.producerDescriptors().rawText());
     assertTrue(product.producerDescriptors().descriptors().contains(new ProducerTaste.Evidence("CARAMEL", "Карамель")));
@@ -25,6 +30,9 @@ class CatalogAdaptersTest {
     assertEquals(1000, offer.weightG());
     assertEquals(2400, offer.price().intValueExact());
     assertEquals(600, offer.pricePer250g().intValueExact());
+    assertEquals("InStock", offer.availability());
+    assertEquals("OutOfStock", product.offers().get(1).availability());
+    assertNull(product.offers().get(2).availability());
   }
 
   @Test

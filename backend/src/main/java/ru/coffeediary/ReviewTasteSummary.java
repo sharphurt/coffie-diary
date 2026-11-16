@@ -3,9 +3,13 @@ package ru.coffeediary;
 import java.util.*;
 
 final class ReviewTasteSummary {
-  record Sample(String author, ReviewTaste.Observation observation) {}
+  record Sample(String author, ReviewTaste.Observation observation, String sourceUrl) {}
   record Dimension(String status, String bucket, int independentAuthors,
-      int unverifiedObservations, int conflictingAuthors, Map<String, Integer> distribution) {}
+      int unverifiedObservations, int conflictingAuthors, Map<String, Integer> distribution, List<String> sourceUrls) {
+    boolean hasConsensus() {
+      return "CONSENSUS".equals(status);
+    }
+  }
 
   private static final List<String> DIMENSIONS =
       List.of("acidity", "bitterness", "sweetness", "astringency", "body", "aromaIntensity");
@@ -39,7 +43,12 @@ final class ReviewTasteSummary {
           }
         }
       }
-      result.put(dimension, new Dimension(status, bucket, count, unverified, conflicts, distribution));
+      String winner = bucket;
+      var sourceUrls = samples.stream().filter(sample -> dimension.equals(sample.observation().dimension())
+              && winner != null && winner.equals(sample.observation().bucket()) && sample.author() != null
+              && authors.get(sample.author()).size() == 1)
+          .map(Sample::sourceUrl).filter(Objects::nonNull).distinct().sorted().toList();
+      result.put(dimension, new Dimension(status, bucket, count, unverified, conflicts, distribution, sourceUrls));
     }
     return result;
   }

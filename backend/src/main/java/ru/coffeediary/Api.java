@@ -286,9 +286,10 @@ public class Api {
   @GetMapping("/recommendations")
   public Object recommendations(Principal p,
       @RequestParam(defaultValue = "false") boolean includeUnknownRoast,
-      @RequestParam(defaultValue = "false") boolean includeUnverified,
-      @RequestParam(required = false) java.math.BigDecimal budget) {
-    return discovery.recommend(owner(p), includeUnknownRoast, includeUnverified, budget);
+      @RequestParam(defaultValue = "true") boolean includeUnverified,
+      @RequestParam(required = false) java.math.BigDecimal budget,
+      @RequestParam(defaultValue = "FILTER") String roast) {
+    return discovery.recommend(owner(p), includeUnknownRoast, includeUnverified, budget, roast);
   }
 
   @ExceptionHandler(Rules.Invalid.class)

@@ -30,7 +30,7 @@ class CatalogService {
         select s.code, coalesce(r.status, 'NEVER_SYNCED') status,
                coalesce(reviews.status,'UNKNOWN') "reviewsStatus",
                r.started_at, r.finished_at, r.product_count
-        from (values ('FOLK'), ('TASTY')) s(code)
+        from (values ('FOLK')) s(code)
         left join lateral (
           select * from catalog_import_run where source_code=s.code order by started_at desc limit 1
         ) r on true left join lateral (
@@ -90,29 +90,23 @@ class CatalogService {
 
   Object reviewFeatures(UUID id) {
     product(id);
+    var evidence = ReviewTasteEvidence.load(db, Set.of(id)).getOrDefault(id, List.of());
     var observations = new ArrayList<Map<String, Object>>();
-    var samples = new ArrayList<ReviewTasteSummary.Sample>();
-    for (var review : db.queryForList("""
-        select content_hash,body,source_url,author_hash,author_ambiguous from external_review where product_id=?
-        order by observed_at desc,content_hash limit 500
-        """, id)) {
-      for (var signal : ReviewTaste.extract((String) review.get("body"))) {
-        String author = Boolean.TRUE.equals(review.get("author_ambiguous"))
-            ? null : (String) review.get("author_hash");
-        samples.add(new ReviewTasteSummary.Sample(author, signal));
-        observations.add(Map.of("dimension", signal.dimension(), "bucket", signal.bucket(),
-            "evidence", signal.evidence(), "reviewHash", review.get("content_hash"),
-            "sourceUrl", review.get("source_url"), "authorIdentified", author != null));
-      }
+    for (var item : evidence) {
+      var sample = item.sample();
+      var signal = sample.observation();
+      observations.add(Map.of("dimension", signal.dimension(), "bucket", signal.bucket(),
+          "evidence", signal.evidence(), "reviewHash", item.hash(),
+          "sourceUrl", sample.sourceUrl(), "authorIdentified", sample.author() != null));
     }
     return Map.of("extractorVersion", ReviewTaste.VERSION, "authorsVerified",
-        !samples.isEmpty() && samples.stream().allMatch(sample -> sample.author() != null),
-        "observations", observations, "summary", ReviewTasteSummary.summarize(samples));
+        !evidence.isEmpty() && evidence.stream().allMatch(item -> item.sample().author() != null),
+        "observations", observations, "summary", ReviewTasteEvidence.summarize(evidence));
   }
 
   Object products(String q) {
     return db.queryForList("""
-        select * from catalog_product where strpos(lower(name),lower(?))>0 or ?=''
+        select * from catalog_product where source_code='FOLK' and (strpos(lower(name),lower(?))>0 or ?='')
         order by name,id limit 500
         """, q.strip(), q.strip()).stream().map(this::decodeOffers).toList();
   }
@@ -148,7 +142,7 @@ class CatalogService {
   }
 
   synchronized UUID start(String source) {
-    if (!List.of("FOLK", "TASTY").contains(source))
+    if (!"FOLK".equals(source))
       throw new ResponseStatusException(HttpStatus.NOT_FOUND);
     if (Boolean.TRUE.equals(db.queryForObject("""
           select exists(select 1 from catalog_import_run where source_code=?
@@ -180,16 +174,17 @@ class CatalogService {
     transaction.executeWithoutResult(status -> {
       for (var p : products) {
         UUID product = db.queryForObject("""
-            insert into catalog_product(id,source_code,url,name,product_type,price,currency,availability,offers,producer_descriptors,processing)
-            values(?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb) on conflict (source_code,url) do update set
+            insert into catalog_product(id,source_code,url,name,product_type,price,currency,availability,offers,producer_descriptors,processing,roast)
+            values(?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb,?) on conflict (source_code,url) do update set
             name=excluded.name, product_type=excluded.product_type, price=excluded.price,
             currency=excluded.currency, availability=excluded.availability, offers=excluded.offers,
-            producer_descriptors=excluded.producer_descriptors,processing=excluded.processing,last_seen_at=now()
+            producer_descriptors=excluded.producer_descriptors,processing=excluded.processing,
+            roast=excluded.roast,last_seen_at=now()
             returning id
             """, UUID.class, UUID.randomUUID(), source, p.url(), p.name(), p.type(), p.price(), p.currency(), p.availability(),
             encodeOffers(p.offers()),
             p.producerDescriptors() == null ? null : json.valueToTree(p.producerDescriptors()).toString(),
-            json.valueToTree(p.processing()).toString());
+            json.valueToTree(p.processing()).toString(), p.roast());
         db.update("""
             with candidate as (
               select p.id, jsonb_build_object(
@@ -198,7 +193,8 @@ class CatalogService {
                 || case when p.producer_descriptors is null then '{}'::jsonb
                    else jsonb_build_object('producer_descriptors',p.producer_descriptors) end
                 || case when p.processing='[]'::jsonb then '{}'::jsonb
-                   else jsonb_build_object('processing',p.processing) end snapshot
+                   else jsonb_build_object('processing',p.processing) end
+                || case when p.roast is null then '{}'::jsonb else jsonb_build_object('roast',p.roast) end snapshot
               from catalog_product p where p.id=?
             ), inserted as (
               insert into catalog_revision(id,product_id,snapshot)

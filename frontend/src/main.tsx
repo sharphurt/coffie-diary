@@ -83,55 +83,59 @@ const descriptorGroups: Record<string, string> = {
   FERMENTED: "ферментация", SPICY: "пряности", EARTHY: "землистые ноты",
 };
 const processingLabels: Record<string, string> = { NATURAL: "натуральная", WASHED: "мытая", HONEY: "хани" };
-
-function RecommendationReason({ score }: { score: Row }) {
-  const matches = score.reasons as Row[];
-  const first = matches[0];
+function RecommendationReason({ reason }: { reason: Row }) {
+  const contrast = reason.direction === "CONTRAST";
+  const names = (codes: string[], labels: Record<string, string>) => codes.map(code => labels[code] ?? code).join(", ");
+  const difference = (candidate: string[], original: string[], labels: Record<string, string>) =>
+    [candidate.length ? `в этом кофе — ${names(candidate, labels)}` : "",
+      original.length ? `в вашем лоте — ${names(original, labels)}` : ""].filter(Boolean).join(", ");
+  const notes = difference(reason.candidateDescriptors, reason.anchorDescriptors, descriptorGroups);
+  const methods = difference(reason.candidateProcessing, reason.anchorProcessing, processingLabels);
   return <>
-    <p>Похож на «{first.purchases[0].lotName}» из вашего дневника.</p>
-    <p>Низкая уверенность: версия вашей пачки не подтверждена.</p>
-    <details>
-      <summary>Почему этот кофе</summary>
-      <ul>{matches.map(reason => <li key={reason.productId}>
-        <a href={reason.sourceUrl} target="_blank" rel="noreferrer">
-          {Array.from(new Set<string>(reason.purchases.map((purchase: Row) => purchase.lotName))).join(", ")}
-        </a> · ваша оценка {sensoryNumber.format(reason.rating)} из 5
-        {!!reason.descriptors.length && <p>Общие ноты: {reason.descriptors.map((group: string) => descriptorGroups[group] ?? group).join(", ")}</p>}
-        {!!reason.processing.length && <p>Общая обработка: {reason.processing.map((code: string) => processingLabels[code] ?? code).join(", ")}</p>}
-      </li>)}</ul>
-    </details>
+    <p>{contrast ? "Другой профиль после" : reason.direction === "SIMILAR" ? "Похож на" : "Для сравнения с"}{" "}
+      <a href={reason.sourceUrl} target="_blank" rel="noreferrer">{reason.lotName}</a>{" "}
+      ({sensoryNumber.format(reason.rating)} из 5).
+    </p>
+    {contrast && notes && <p>Отличия в описании FOLK: {notes}.</p>}
+    {contrast && methods && <p>Отличия в обработке: {methods}.</p>}
+    {!contrast && !!reason.sharedDescriptors.length &&
+      <p>Общие ноты по описанию FOLK: {names(reason.sharedDescriptors, descriptorGroups)}.</p>}
+    {!contrast && !!reason.sharedProcessing.length &&
+      <p>Общая обработка: {names(reason.sharedProcessing, processingLabels)}.</p>}
   </>;
 }
 
 function DiscoveryCards({ items }: { items: Row[] }) {
   return <ul className="discovery-cards">{items.map(item => (
     <li key={item.id}>
-      <span>{item.source_code === "FOLK" ? "FOLK" : "Tasty Coffee"}</span>
-      <h3><a href={item.url} target="_blank" rel="noreferrer">{item.name}</a></h3>
+      <h3>{item.name}</h3>
+      <p>{({ FILTER: "Для фильтра", OMNI: "Универсальная обжарка", ESPRESSO: "Для эспрессо" } as Row)[item.roast]
+        ?? "Обжарка не указана"}</p>
       {item.producer_text && <p>Описание обжарщика: {item.producer_text}</p>}
       <p>{item.weight_g == null ? "Вес неизвестен" : `${item.weight_g} г`}
         {" · "}{item.price == null ? "Цена неизвестна" : `${item.price} ${item.currency ?? ""}`}
         {item.price_per_250g != null && ` · ${item.price_per_250g} ₽ / 250 г`}
       </p>
-      {item.needs_refresh && <p>Наличие и цена требуют проверки</p>}
-      {item.availability_unknown && <p>Наличие не подтверждено</p>}
       {item.price_unknown && <p>Не удалось проверить бюджет</p>}
-      {item.recommendation && <RecommendationReason score={item.recommendation} />}
+      {item.folk_reason && <RecommendationReason reason={item.folk_reason} />}
+      <p><a href={item.url} target="_blank" rel="noreferrer">
+        {item.needs_refresh || item.availability_unknown || item.price_unknown ? "Проверить у FOLK" : "Открыть товар на FOLK"}
+      </a></p>
     </li>
   ))}</ul>;
 }
 
-function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
+function DiscoveryPanel({ catalogRevision, linkLot }: { catalogRevision: string; linkLot: () => void }) {
   const [unknownRoast, setUnknownRoast] = useState(false);
-  const [unverified, setUnverified] = useState(false);
+  const [roast, setRoast] = useState("FILTER");
   const [budget, setBudget] = useState("");
-  const [result, setResult] = useState<{ items: Row[]; needsCheck: Row[]; personalItems?: Row[] }>();
+  const [result, setResult] = useState<{ items: Row[]; needsCheck: Row[]; personalItems?: Row[]; hasRatedFolkLot?: boolean }>();
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
     setResult(undefined);
     setError("");
-    const params = new URLSearchParams({ includeUnknownRoast: String(unknownRoast), includeUnverified: String(unverified) });
+    const params = new URLSearchParams({ includeUnknownRoast: String(unknownRoast), roast });
     if (budget) params.set("budget", budget);
     void api(`/recommendations?${params}`).then(data => {
       if (active) setResult(data);
@@ -139,16 +143,23 @@ function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
       if (active) setError(failure.message);
     });
     return () => { active = false; };
-  }, [unknownRoast, unverified, budget, catalogRevision]);
+  }, [unknownRoast, roast, budget, catalogRevision]);
 
   return <section aria-labelledby="discovery-title">
-    <h2 id="discovery-title">{result?.personalItems?.length ? "По вашим оценкам" : "Для знакомства"}</h2>
-    <p>Подборка зернового кофе из каталогов обжарщиков.</p>
+    <h2 id="discovery-title">{result?.personalItems?.length ? "Что купить у FOLK" : "FOLK для знакомства"}</h2>
+    {result?.hasRatedFolkLot === false && <p>Чтобы получить персональную подборку, свяжите оценённый лот с товаром FOLK.{" "}
+      <button onClick={linkLot}>Открыть мои лоты</button></p>}
+    {result?.hasRatedFolkLot && !result.personalItems?.length &&
+      <p>Для вашего лота пока нет подходящих вариантов по выбранным фильтрам и опубликованным признакам.</p>}
     <div className="discovery-filters">
+      <label>Обжарка
+        <select value={roast} onChange={e => setRoast(e.target.value)}>
+          <option value="FILTER">Фильтр</option>
+          <option value="ESPRESSO">Эспрессо</option>
+        </select>
+      </label>
       <label className="check"><input type="checkbox" checked={unknownRoast}
         onChange={e => setUnknownRoast(e.target.checked)} /> Включить неизвестную обжарку</label>
-      <label className="check"><input type="checkbox" checked={unverified}
-        onChange={e => setUnverified(e.target.checked)} /> Показать товары, которые нужно проверить</label>
       <label>Бюджет, ₽ / 250 г
         <input type="number" min="0" step="0.01" value={budget}
           onChange={e => { if (e.target.validity.valid) setBudget(e.target.value); }} />
@@ -156,14 +167,9 @@ function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
     </div>
     {error && <p role="alert">{error}</p>}
     {!!result?.personalItems?.length && <DiscoveryCards items={result.personalItems ?? []} />}
-    {!!result?.items?.length && <>
-      {!!result?.personalItems?.length && <h3>Для знакомства</h3>}
-      <DiscoveryCards items={result.items} />
-    </>}
-    {result && !result.items?.length && !result.personalItems?.length && <p>
-      {unknownRoast ? "Нет подходящего кофе с подтверждённым наличием. Попробуйте изменить фильтры или обновить каталог."
-        : "Пока профиль обжарки в каталогах не подтверждён. Включите неизвестную обжарку, чтобы посмотреть подборку."}
-    </p>}
+    {!!result?.items?.length && <DiscoveryCards items={result.items} />}
+    {result && !result.items?.length && !result.personalItems?.length && !result.needsCheck?.length &&
+      <p>По этим фильтрам кофе не найден. Измените фильтры или обновите каталог FOLK.</p>}
     {!!result?.needsCheck?.length && <>
       <h3>Нужно проверить</h3>
       <DiscoveryCards items={result.needsCheck} />
@@ -171,7 +177,7 @@ function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
   </section>;
 }
 
-function CatalogPanel() {
+function CatalogPanel({ linkLot }: { linkLot: () => void }) {
   const [sources, setSources] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
   const [error, setError] = useState("");
@@ -187,9 +193,7 @@ function CatalogPanel() {
     return () => window.clearInterval(timer);
   }, []);
   return <>
-    <DiscoveryPanel catalogRevision={sources.map(source => source.finished_at ?? "").join("|")} />
-    <details className="catalog-details" open>
-    <summary>Каталоги магазинов</summary>
+    <DiscoveryPanel linkLot={linkLot} catalogRevision={sources.map(source => source.finished_at ?? "").join("|")} />
     {sources.map(source => <p key={source.code}>
       {source.code} · {({ NEVER_SYNCED: "Не загружен", RUNNING: "Импортируется",
         PARTIAL: "Загружен частично", FAILED: "Ошибка импорта" } as Row)[source.status]}
@@ -200,12 +204,12 @@ function CatalogPanel() {
       }}>Обновить {source.code}</button>
     </p>)}
     {error && <p role="alert">{error}</p>}
+    <details className="catalog-details">
+    <summary>Все товары FOLK</summary>
     <ul className="discovery-cards">{products.map(product => <li key={product.id}>
       <a href={product.url} target="_blank" rel="noreferrer">{product.name}</a> · {product.source_code}
       {" · "}{({ BEANS: "Зёрна", DRIP: "Дрипы", CAPSULES: "Капсулы",
         INSTANT: "Растворимый", CONCENTRATE: "Концентрат" } as Row)[product.product_type] ?? "Вид неизвестен"}
-      {" · "}{product.reviews_status === "AVAILABLE" ? "Отзывы загружены"
-        : product.reviews_status === "UNAVAILABLE" ? "Отзывы сейчас недоступны" : "Отзывы не проверены"}
       {product.offers?.length ? <ul>{product.offers.map((offer: Row) => <li key={offer.variantId}>
         {offer.weightG == null ? "Вес неизвестен" : `${offer.weightG} г`}
         {" · "}{offer.price == null ? offer.rawPrice || "Цена неизвестна" : `${offer.price} ${offer.currency ?? ""}`}
@@ -1122,7 +1126,17 @@ export function App() {
           </>
         )}
         {page === "Что попробовать" && (
-          <CatalogPanel />
+          <CatalogPanel linkLot={() => {
+            setPage("История");
+            setKind("lots");
+            setDeleted(false);
+            setQuery("");
+            setHistoryRating("");
+            setStart("");
+            setEnd("");
+            setHistorySort("recent");
+            setOffset(0);
+          }} />
         )}
         {page === "Настройки" && (
           <section className="settings">

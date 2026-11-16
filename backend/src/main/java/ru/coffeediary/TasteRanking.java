@@ -7,14 +7,19 @@ final class TasteRanking {
   static final List<String> DIMENSIONS =
       List.of("acidity", "bitterness", "sweetness", "astringency", "body", "aromaIntensity");
 
-  record Features(Set<String> descriptors, Set<String> processing) {
-    static Features from(JsonNode descriptors, JsonNode processing) {
+  record Features(Set<String> descriptors, Set<String> processing,
+      Map<String, ReviewTasteSummary.Dimension> reviewTaste) {
+    Features(Set<String> descriptors, Set<String> processing) {
+      this(descriptors, processing, Map.of());
+    }
+
+    static Features from(JsonNode descriptors, JsonNode processing, Map<String, ReviewTasteSummary.Dimension> reviews) {
       var groups = new TreeSet<String>();
       descriptors.path("descriptors").forEach(node -> groups.add(node.path("group").asText()));
       groups.remove("");
       var methods = new TreeSet<String>();
       processing.forEach(node -> methods.add(node.asText()));
-      return new Features(groups, methods);
+      return new Features(groups, methods, reviews);
     }
   }
 
@@ -23,14 +28,21 @@ final class TasteRanking {
   record Anchor(UUID productId, String sourceUrl, Features features, List<Purchase> purchases,
       double rating, double reliability, Map<String, Double> sensory) {}
   record Reason(UUID productId, String sourceUrl, List<PurchaseRef> purchases, double rating,
-      Set<String> descriptors, Set<String> processing, double similarity, double coverage, double weight) {}
+      Set<String> descriptors, Set<String> processing, List<ReviewComparison> reviewTaste,
+      double similarity, double coverage, double weight) {}
+  record ReviewComparison(String dimension, ReviewEvidence candidate, ReviewEvidence anchor, double similarity) {}
+  record ReviewEvidence(String bucket, int independentAuthors, List<String> sourceUrls) {
+    static ReviewEvidence from(ReviewTasteSummary.Dimension dimension) {
+      return new ReviewEvidence(dimension.bucket(), dimension.independentAuthors(), dimension.sourceUrls());
+    }
+  }
   record PurchaseRef(UUID bagId, UUID lotId, String lotName) {}
   record Score(double personalScore, double predictedRating, Double tasteFit, Map<String, Double> sensory,
       String confidence, List<Reason> reasons) {}
 
   private record BagRating(Purchase purchase, double rating, double methodReliability, Map<String, Double> sensory) {}
   private record Match(Anchor anchor, double similarity, double coverage, double weight,
-      Set<String> descriptors, Set<String> processing) {}
+      Set<String> descriptors, Set<String> processing, List<ReviewComparison> reviewTaste) {}
 
   static Optional<Anchor> anchor(UUID id, String url, Features features, List<Purchase> purchases) {
     var bags = purchases.stream().map(TasteRanking::rateBag).flatMap(Optional::stream).toList();
@@ -100,13 +112,32 @@ final class TasteRanking {
     var other = anchor.features();
     double descriptors = jaccard(candidate.descriptors(), other.descriptors());
     double processing = jaccard(candidate.processing(), other.processing());
-    double available = (Double.isNaN(descriptors) ? 0 : 3) + (Double.isNaN(processing) ? 0 : 2);
+    var reviews = compareReviews(candidate, other);
+    double reviewWeight = reviews.isEmpty() ? 0 : reviews.size() == 1 ? 0.75 : 1.5;
+    double available = (Double.isNaN(descriptors) ? 0 : 3) + (Double.isNaN(processing) ? 0 : 2) + reviewWeight;
     double coverage = available / 11;
     if (coverage < 0.35) return Optional.empty();
-    double similarity = (3 * descriptors + 2 * processing) / available;
+    double reviewSimilarity = reviews.stream().mapToDouble(ReviewComparison::similarity).average().orElse(0);
+    double weighted = (Double.isNaN(descriptors) ? 0 : 3 * descriptors)
+        + (Double.isNaN(processing) ? 0 : 2 * processing) + reviewWeight * reviewSimilarity;
+    double similarity = weighted / available;
     if (similarity < 0.45) return Optional.empty();
     return Optional.of(new Match(anchor, similarity, coverage, similarity * similarity * coverage * anchor.reliability(),
-        intersection(candidate.descriptors(), other.descriptors()), intersection(candidate.processing(), other.processing())));
+        intersection(candidate.descriptors(), other.descriptors()),
+        intersection(candidate.processing(), other.processing()), reviews));
+  }
+
+  private static List<ReviewComparison> compareReviews(Features candidate, Features anchor) {
+    var comparisons = new ArrayList<ReviewComparison>();
+    for (String dimension : DIMENSIONS) {
+      var left = candidate.reviewTaste().get(dimension);
+      var right = anchor.reviewTaste().get(dimension);
+      if (left == null || right == null || !left.hasConsensus() || !right.hasConsensus()) continue;
+      double similarity = left.bucket().equals(right.bucket()) ? 1
+          : "MEDIUM".equals(left.bucket()) || "MEDIUM".equals(right.bucket()) ? 0.5 : 0;
+      comparisons.add(new ReviewComparison(dimension, ReviewEvidence.from(left), ReviewEvidence.from(right), similarity));
+    }
+    return List.copyOf(comparisons);
   }
 
   private static double jaccard(Set<String> left, Set<String> right) {
@@ -127,7 +158,8 @@ final class TasteRanking {
     return new Reason(anchor.productId(), anchor.sourceUrl(),
         anchor.purchases().stream().map(purchase -> new PurchaseRef(
             purchase.bagId(), purchase.lotId(), purchase.lotName())).toList(),
-        anchor.rating(), match.descriptors(), match.processing(), match.similarity(), match.coverage(), match.weight());
+        anchor.rating(), match.descriptors(), match.processing(), match.reviewTaste(),
+        match.similarity(), match.coverage(), match.weight());
   }
 
   private TasteRanking() {}

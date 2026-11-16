@@ -243,6 +243,11 @@ public class Api {
     return catalogs.reviews(id);
   }
 
+  @GetMapping("/catalog/products/{id}/review-features")
+  public Object reviewFeatures(@PathVariable UUID id) {
+    return catalogs.reviewFeatures(id);
+  }
+
   @PostMapping("/catalog/products/{id}/reviews/import")
   public Object importCatalogReviews(@PathVariable UUID id, @RequestBody CatalogService.ReviewImport input) {
     return catalogs.importReviews(id, input);

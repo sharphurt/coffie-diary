@@ -78,6 +78,23 @@ class CatalogService {
         """, id));
   }
 
+  Object reviewFeatures(UUID id) {
+    product(id);
+    var observations = new ArrayList<Map<String, Object>>();
+    for (var review : db.queryForList("""
+        select content_hash,body,source_url from external_review where product_id=?
+        order by observed_at desc,content_hash limit 500
+        """, id)) {
+      for (var signal : ReviewTaste.extract((String) review.get("body"))) {
+        observations.add(Map.of("dimension", signal.dimension(), "bucket", signal.bucket(),
+            "evidence", signal.evidence(), "reviewHash", review.get("content_hash"),
+            "sourceUrl", review.get("source_url")));
+      }
+    }
+    return Map.of("extractorVersion", ReviewTaste.VERSION, "authorsVerified", false,
+        "observations", observations);
+  }
+
   Object products(String q) {
     return db.queryForList("""
         select * from catalog_product where strpos(lower(name),lower(?))>0 or ?=''

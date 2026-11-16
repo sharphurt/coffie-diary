@@ -36,6 +36,18 @@ class CatalogPersistenceTest {
       var unavailable = (Map<?, ?>) service.importReviews(id, new CatalogService.ReviewImport(url, List.of()));
       assertEquals("UNAVAILABLE", unavailable.get("status"));
       assertEquals(((Map<?, ?>) first).get("items"), unavailable.get("items"));
+      var batch = new CatalogService.ReviewImport(url, List.of("Кофе не горчит", "Кофе  не горчит",
+          "Доставка быстрая, упаковка целая", "Команда поддержки: кофе горчит", "Хотелось бы слаще"));
+      service.importReviews(id, batch);
+      service.importReviews(id, batch);
+      var features = (Map<?, ?>) service.reviewFeatures(id);
+      var signals = (List<?>) features.get("observations");
+      assertEquals(1, signals.size());
+      var signal = (Map<?, ?>) signals.getFirst();
+      assertEquals("LOW", signal.get("bucket"));
+      assertEquals("bitterness", signal.get("dimension"));
+      assertEquals(url, signal.get("sourceUrl"));
+      assertEquals(false, features.get("authorsVerified"));
     } finally {
       db.update("delete from external_review where product_id=?", id);
       db.update("delete from catalog_product where id=?", id);

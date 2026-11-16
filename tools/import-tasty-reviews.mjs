@@ -15,9 +15,16 @@ export async function collectTastyReviews(page, url) {
   return page.locator('.cards-community-post .review-card').evaluateAll((cards, expected) => {
     const texts = new Set();
     for (const card of cards) {
-      const body = card.querySelector('.text-post');
-      const product = card.querySelector('.product-post a[href]');
+      if (card.parentElement?.closest('.review-card')) continue;
+      const own = selector => [...card.querySelectorAll(selector)]
+        .filter(element => element.closest('.review-card') === card);
+      const body = own('.text-post')[0];
+      const product = own('.product-post a[href]')[0];
       if (!body || !product) continue;
+      if (card.matches('[data-author-role="staff"], [data-author-role="employee"]')
+          || own('[data-author-role="staff"], [data-author-role="employee"]').length
+          || own('p, span').some(element => !body.contains(element)
+            && /^(команда поддержки|команда tasty coffee|сотрудник tasty coffee)$/iu.test(element.textContent.trim()))) continue;
       const href = new URL(product.href);
       if (href.origin + href.pathname !== expected) continue;
       const text = body.textContent.replace(/\s+/gu, ' ').trim();

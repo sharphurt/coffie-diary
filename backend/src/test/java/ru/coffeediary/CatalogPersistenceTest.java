@@ -98,10 +98,18 @@ class CatalogPersistenceTest {
     assertEquals(firstRevision, productRow(db, source, initial.url()).get("current_revision_id"));
     assertEquals(2, count(db, source));
 
-    assertEquals("PARTIAL", run(db, service, source, () -> List.of(product("one", "Новое название", List.of(large)))));
+    var described = new CatalogAdapters.Product(initial.url(), initial.name(), initial.type(), initial.price(),
+        initial.currency(), initial.availability(), initial.offers(),
+        ProducerTaste.extract("Смородина и какао", initial.url(), "fixture"));
+    assertEquals("PARTIAL", run(db, service, source, () -> List.of(described)));
     var changed = productRow(db, source, initial.url());
     assertEquals(first.get("id"), changed.get("id"));
     assertNotEquals(firstRevision, changed.get("current_revision_id"));
+    var current = (Map<?, ?>) service.product((UUID) changed.get("id"));
+    var producer = (Map<?, ?>) current.get("producer_descriptors");
+    assertEquals("Смородина и какао", producer.get("rawText"));
+    assertEquals(initial.url(), producer.get("sourceUrl"));
+    assertEquals(List.of(), ((Map<?, ?>) service.reviewFeatures((UUID) changed.get("id"))).get("observations"));
     assertEquals(originalSnapshot, db.queryForObject("select snapshot::text from catalog_revision where id=?",
         String.class, firstRevision));
     assertEquals(3, count(db, source));

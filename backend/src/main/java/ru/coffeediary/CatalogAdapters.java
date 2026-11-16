@@ -16,10 +16,17 @@ final class CatalogAdapters {
   record Offer(String variantId, Integer weightG, BigDecimal price, String currency, String availability,
       BigDecimal pricePer250g, String rawPrice) {}
   record Product(String url, String name, String type, BigDecimal price, String currency, String availability,
-      List<Offer> offers) {}
+      List<Offer> offers, ProducerTaste.Document producerDescriptors) {
+    Product(String url, String name, String type, BigDecimal price, String currency, String availability,
+        List<Offer> offers) {
+      this(url, name, type, price, currency, availability, offers, null);
+    }
+  }
   private static final Pattern JSON_LD = Pattern.compile(
       "<script\\b[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(.*?)</script>", Pattern.DOTALL);
   private static final Pattern LOC = Pattern.compile("<loc>([^<]+)</loc>");
+  private static final Pattern NUXT = Pattern.compile(
+      "<script\\b[^>]*id=[\"']__NUXT_DATA__[\"'][^>]*>(.*?)</script>", Pattern.DOTALL);
   private static final Pattern TITLE = Pattern.compile("<meta\\s+property=\"og:title\"\\s+content=\"([^\"]+)\"");
   private static final Pattern FOLK_PRODUCT = Pattern.compile("var product = (\\{[^\\r\\n]*});");
   private static final Pattern WEIGHT = Pattern.compile("(\\d+)\\s*(г|гр|кг)?", Pattern.CASE_INSENSITIVE);
@@ -87,7 +94,8 @@ final class CatalogAdapters {
     }
     if (type == null) type = productType(product.path("text").asText());
     return new Product(url, HtmlUtils.htmlUnescape(title.group(1)).strip(), type,
-        price(product.path("price")), "RUB", null, offers);
+        price(product.path("price")), "RUB", null, offers,
+        ProducerTaste.extract(product.path("descr").asText(null), url, "descr"));
   }
 
   static List<Product> tasty(String html) throws IOException {
@@ -141,9 +149,28 @@ final class CatalogAdapters {
       String type = productType(product.path("description").asText());
       if (type == null) type = productType(listed.name());
       return new Product(listed.url(), listed.name(), type, listed.price(),
-          listed.currency(), listed.availability(), List.copyOf(offers.values()));
+          listed.currency(), listed.availability(), List.copyOf(offers.values()),
+          tastyDescriptors(listed.url(), html));
     }
     return listed;
+  }
+
+  private static ProducerTaste.Document tastyDescriptors(String url, String html) throws IOException {
+    var script = NUXT.matcher(html);
+    if (!script.find()) return null;
+    var data = JSON.readTree(script.group(1));
+    if (!data.isArray()) return null;
+    String path = URI.create(url).getPath();
+    String slug = path.substring("/coffee/".length());
+    for (var object : data) {
+      var slugRef = object.path("slug");
+      var descriptionRef = object.path("mini_description");
+      if (!slugRef.isIntegralNumber() || !descriptionRef.isIntegralNumber()) continue;
+      String publishedSlug = data.path(slugRef.intValue()).asText();
+      if (path.equals(publishedSlug) || slug.equals(publishedSlug))
+        return ProducerTaste.extract(data.path(descriptionRef.intValue()).asText(null), url, "mini_description");
+    }
+    return null;
   }
 
   private static Offer offer(String id, Integer grams, JsonNode value, String currency, String availability) {

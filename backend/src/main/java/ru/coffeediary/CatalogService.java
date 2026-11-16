@@ -133,6 +133,8 @@ class CatalogService {
   private Map<String, Object> decodeOffers(Map<String, Object> row) {
     try {
       row.put("offers", json.readValue(row.get("offers").toString(), List.class));
+      if (row.get("producer_descriptors") != null)
+        row.put("producer_descriptors", json.readValue(row.get("producer_descriptors").toString(), Map.class));
       return row;
     } catch (java.io.IOException e) {
       throw new IllegalStateException("Invalid stored offers", e);
@@ -177,18 +179,22 @@ class CatalogService {
     transaction.executeWithoutResult(status -> {
       for (var p : products) {
         UUID product = db.queryForObject("""
-            insert into catalog_product(id,source_code,url,name,product_type,price,currency,availability,offers)
-            values(?,?,?,?,?,?,?,?,?::jsonb) on conflict (source_code,url) do update set
+            insert into catalog_product(id,source_code,url,name,product_type,price,currency,availability,offers,producer_descriptors)
+            values(?,?,?,?,?,?,?,?,?::jsonb,?::jsonb) on conflict (source_code,url) do update set
             name=excluded.name, product_type=excluded.product_type, price=excluded.price,
-            currency=excluded.currency, availability=excluded.availability, offers=excluded.offers,last_seen_at=now()
+            currency=excluded.currency, availability=excluded.availability, offers=excluded.offers,
+            producer_descriptors=excluded.producer_descriptors,last_seen_at=now()
             returning id
             """, UUID.class, UUID.randomUUID(), source, p.url(), p.name(), p.type(), p.price(), p.currency(), p.availability(),
-            encodeOffers(p.offers()));
+            encodeOffers(p.offers()),
+            p.producerDescriptors() == null ? null : json.valueToTree(p.producerDescriptors()).toString());
         db.update("""
             with candidate as (
               select p.id, jsonb_build_object(
                 'name',p.name,'type',p.product_type,'price',p.price,'currency',p.currency,
-                'availability',p.availability,'offers',p.offers) snapshot
+                'availability',p.availability,'offers',p.offers)
+                || case when p.producer_descriptors is null then '{}'::jsonb
+                   else jsonb_build_object('producer_descriptors',p.producer_descriptors) end snapshot
               from catalog_product p where p.id=?
             ), inserted as (
               insert into catalog_revision(id,product_id,snapshot)

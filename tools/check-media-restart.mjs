@@ -244,8 +244,13 @@ if (process.env.E2E_LIVE_CATALOG === 'true') {
     assert.ok(run.product_count > 0);
     const products = await read(asFirst, '/catalog/products');
     const product = products.find(item => item.source_code === source && item.product_type === 'BEANS'
-      && item.offers.some(offer => offer.weightG === 1000 && offer.pricePer250g != null));
+      && item.offers.some(offer => offer.weightG === 1000 && offer.pricePer250g != null)
+      && item.producer_descriptors?.descriptors.length > 0);
     assert.ok(product);
+    assert.equal(product.producer_descriptors.sourceUrl, product.url);
+    assert.equal(product.producer_descriptors.sourceField, source === 'FOLK' ? 'descr' : 'mini_description');
+    assert.ok(product.producer_descriptors.descriptors.every(signal =>
+      product.producer_descriptors.rawText.includes(signal.term)));
     const large = product.offers.find(offer => offer.weightG === 1000 && offer.pricePer250g != null);
     assert.ok(Math.abs(large.price / 4 - large.pricePer250g) <= 0.005001);
     const resolved = await asFirst('/catalog/resolve-url', 'POST', { url: product.url });

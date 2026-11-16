@@ -65,7 +65,7 @@ try {
   $javaProcess = Start-TestApp 'restart'
   $env:E2E_CATALOG_DATABASE = 'true'
   try {
-    & $Maven -q -f backend/pom.xml '-Dtest=CatalogPersistenceTest' test
+    & $Maven -q -f backend/pom.xml '-Dtest=CatalogPersistenceTest,DiscoveryPersistenceTest' test
     if ($LASTEXITCODE) { throw "Catalog persistence tests failed; logs: $run" }
   } finally { Remove-Item Env:E2E_CATALOG_DATABASE }
   & node ./tools/check-media-restart.mjs

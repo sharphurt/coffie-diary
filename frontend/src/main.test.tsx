@@ -84,3 +84,31 @@ test('catalog shows actual pack price and only confirmed normalized prices', asy
   expect(await screen.findByText('1000 г · 2400 RUB · 600 ₽ / 250 г')).toBeTruthy();
   expect(screen.getByText('Вес неизвестен · от 900 ₽').textContent).not.toContain('/ 250 г');
 });
+
+test('discovery shows store links and separates offers that need checking', async () => {
+  const defaultApi = mockApi.getMockImplementation()!;
+  const link = 'https://shop.tastycoffee.ru/coffee/test';
+  mockApi.mockImplementation(async (path, ...args) => {
+    if (!path.startsWith('/recommendations?')) return defaultApi(path, ...args);
+    const params = new URLSearchParams(path.split('?')[1]);
+    return {
+      items: params.get('includeUnknownRoast') === 'true' ? [
+        { id: 'tasty', name: 'Бразилия', url: link, source_code: 'TASTY', price: 520, weight_g: 250, currency: 'RUB' },
+      ] : [],
+      needsCheck: params.get('includeUnverified') === 'true' ? [
+        { id: 'folk', name: 'Колумбия', url: 'https://folk.shop/tproduct/1-test', source_code: 'FOLK',
+          availability_unknown: true },
+      ] : [],
+    };
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: /Что попробовать/ }));
+  expect(await screen.findByRole('heading', { name: 'Для знакомства' })).toBeTruthy();
+  await user.click(screen.getByRole('checkbox', { name: 'Включить неизвестную обжарку' }));
+  expect((await screen.findByRole('link', { name: 'Бразилия' })).getAttribute('href')).toBe(link);
+  expect(screen.queryByText('Колумбия')).toBeNull();
+  await user.click(screen.getByRole('checkbox', { name: 'Показать товары, которые нужно проверить' }));
+  expect(await screen.findByRole('heading', { name: 'Нужно проверить' })).toBeTruthy();
+  expect(screen.getByText('Наличие не подтверждено')).toBeTruthy();
+});

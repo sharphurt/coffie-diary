@@ -77,6 +77,68 @@ function RecipeFields({ recipe, title = "Обычный рецепт" }: { recip
   );
 }
 
+function DiscoveryCards({ items }: { items: Row[] }) {
+  return <ul className="discovery-cards">{items.map(item => (
+    <li key={item.id}>
+      <span>{item.source_code === "FOLK" ? "FOLK" : "Tasty Coffee"}</span>
+      <h3><a href={item.url} target="_blank" rel="noreferrer">{item.name}</a></h3>
+      {item.producer_text && <p>Описание обжарщика: {item.producer_text}</p>}
+      <p>{item.weight_g == null ? "Вес неизвестен" : `${item.weight_g} г`}
+        {" · "}{item.price == null ? "Цена неизвестна" : `${item.price} ${item.currency ?? ""}`}
+        {item.price_per_250g != null && ` · ${item.price_per_250g} ₽ / 250 г`}
+      </p>
+      {item.needs_refresh && <p>Наличие и цена требуют проверки</p>}
+      {item.availability_unknown && <p>Наличие не подтверждено</p>}
+      {item.price_unknown && <p>Не удалось проверить бюджет</p>}
+    </li>
+  ))}</ul>;
+}
+
+function DiscoveryPanel({ catalogRevision }: { catalogRevision: string }) {
+  const [unknownRoast, setUnknownRoast] = useState(false);
+  const [unverified, setUnverified] = useState(false);
+  const [budget, setBudget] = useState("");
+  const [result, setResult] = useState<{ items: Row[]; needsCheck: Row[] }>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setResult(undefined);
+    setError("");
+    const params = new URLSearchParams({ includeUnknownRoast: String(unknownRoast), includeUnverified: String(unverified) });
+    if (budget) params.set("budget", budget);
+    void api(`/recommendations?${params}`).then(data => {
+      if (active) setResult(data);
+    }, failure => {
+      if (active) setError(failure.message);
+    });
+    return () => { active = false; };
+  }, [unknownRoast, unverified, budget, catalogRevision]);
+
+  return <section aria-labelledby="discovery-title">
+    <h2 id="discovery-title">Для знакомства</h2>
+    <p>Подборка зернового кофе из каталогов обжарщиков.</p>
+    <div className="discovery-filters">
+      <label className="check"><input type="checkbox" checked={unknownRoast}
+        onChange={e => setUnknownRoast(e.target.checked)} /> Включить неизвестную обжарку</label>
+      <label className="check"><input type="checkbox" checked={unverified}
+        onChange={e => setUnverified(e.target.checked)} /> Показать товары, которые нужно проверить</label>
+      <label>Бюджет, ₽ / 250 г
+        <input type="number" min="0" step="0.01" value={budget}
+          onChange={e => { if (e.target.validity.valid) setBudget(e.target.value); }} />
+      </label>
+    </div>
+    {error && <p role="alert">{error}</p>}
+    {result?.items?.length ? <DiscoveryCards items={result.items} /> : result && <p>
+      {unknownRoast ? "Нет подходящего кофе с подтверждённым наличием. Попробуйте изменить фильтры или обновить каталог."
+        : "Пока профиль обжарки в каталогах не подтверждён. Включите неизвестную обжарку, чтобы посмотреть подборку."}
+    </p>}
+    {!!result?.needsCheck?.length && <>
+      <h3>Нужно проверить</h3>
+      <DiscoveryCards items={result.needsCheck} />
+    </>}
+  </section>;
+}
+
 function CatalogPanel() {
   const [sources, setSources] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
@@ -92,8 +154,10 @@ function CatalogPanel() {
     const timer = window.setInterval(refresh, 5000);
     return () => window.clearInterval(timer);
   }, []);
-  return <section>
-    <h2>Каталоги магазинов</h2>
+  return <>
+    <DiscoveryPanel catalogRevision={sources.map(source => source.finished_at ?? "").join("|")} />
+    <details className="catalog-details" open>
+    <summary>Каталоги магазинов</summary>
     {sources.map(source => <p key={source.code}>
       {source.code} · {({ NEVER_SYNCED: "Не загружен", RUNNING: "Импортируется",
         PARTIAL: "Загружен частично", FAILED: "Ошибка импорта" } as Row)[source.status]}
@@ -104,7 +168,7 @@ function CatalogPanel() {
       }}>Обновить {source.code}</button>
     </p>)}
     {error && <p role="alert">{error}</p>}
-    <ul>{products.map(product => <li key={product.id}>
+    <ul className="discovery-cards">{products.map(product => <li key={product.id}>
       <a href={product.url} target="_blank" rel="noreferrer">{product.name}</a> · {product.source_code}
       {" · "}{({ BEANS: "Зёрна", DRIP: "Дрипы", CAPSULES: "Капсулы",
         INSTANT: "Растворимый", CONCENTRATE: "Концентрат" } as Row)[product.product_type] ?? "Вид неизвестен"}
@@ -116,7 +180,8 @@ function CatalogPanel() {
         {offer.pricePer250g != null && ` · ${offer.pricePer250g} ₽ / 250 г`}
       </li>)}</ul> : <p>Фасовки неизвестны{product.price != null && ` · опубликованная цена: ${product.price} ${product.currency ?? ""}`}</p>}
     </li>)}</ul>
-  </section>;
+    </details>
+  </>;
 }
 
 function BagPhotos({ bag, committed }: { bag: Row; committed: () => Promise<void> }) {

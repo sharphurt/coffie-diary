@@ -9,6 +9,34 @@
 * {
   box-sizing: border-box;
 }
+.discovery-filters,
+.discovery-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 12px;
+}
+.discovery-cards {
+  list-style: none;
+  padding: 0;
+}
+.discovery-cards > li,
+.catalog-details {
+  background: #fff;
+  border: 1px solid #d9ded4;
+  border-radius: 12px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.discovery-cards h3 {
+  margin: 6px 0;
+}
+.discovery-cards a {
+  color: inherit;
+}
+.catalog-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
 body {
   margin: 0;
 }

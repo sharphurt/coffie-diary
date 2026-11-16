@@ -15,11 +15,13 @@ public class Api {
   final DiaryService service;
   final MediaService media;
   final CatalogService catalogs;
+  final DiscoveryService discovery;
 
-  public Api(DiaryService service, MediaService media, CatalogService catalogs) {
+  public Api(DiaryService service, MediaService media, CatalogService catalogs, DiscoveryService discovery) {
     this.service = service;
     this.media = media;
     this.catalogs = catalogs;
+    this.discovery = discovery;
   }
 
   UUID owner(Principal p) {
@@ -282,13 +284,11 @@ public class Api {
   }
 
   @GetMapping("/recommendations")
-  public Object recommendations() {
-    return Map.of(
-        "items",
-        List.of(),
-        "message",
-        "Каталог ещё не загружен. Персональные рекомендации появятся после импорта каталога и"
-            + " привязки оценённых покупок.");
+  public Object recommendations(Principal p,
+      @RequestParam(defaultValue = "false") boolean includeUnknownRoast,
+      @RequestParam(defaultValue = "false") boolean includeUnverified,
+      @RequestParam(required = false) java.math.BigDecimal budget) {
+    return discovery.recommend(owner(p), includeUnknownRoast, includeUnverified, budget);
   }
 
   @ExceptionHandler(Rules.Invalid.class)
